@@ -32,20 +32,24 @@ import (
 
 // Engine is a runtime.Engine backed by a Podman socket.
 type Engine struct {
-	connCtx context.Context // carries the bindings client; derive every call ctx from it
-	log     *slog.Logger
+	connCtx   context.Context // carries the bindings client; derive every call ctx from it
+	socketURL string          // used to dial private connections for attachments
+	log       *slog.Logger
 }
 
 var _ runtime.Engine = (*Engine)(nil)
 
 // New connects to the Podman API at socketURL (for example
-// "unix:///run/podman/podman.sock").
+// "unix:///run/podman/podman.sock"). The stored connection context is
+// detached from ctx's cancellation so a short-lived startup ctx cannot kill
+// later calls. The Engine has no teardown: the connection lives for the
+// life of the process.
 func New(ctx context.Context, socketURL string) (*Engine, error) {
-	connCtx, err := bindings.NewConnection(ctx, socketURL)
+	connCtx, err := bindings.NewConnection(context.WithoutCancel(ctx), socketURL)
 	if err != nil {
 		return nil, fmt.Errorf("podman: connect %s: %w", socketURL, err)
 	}
-	return &Engine{connCtx: connCtx, log: slog.Default()}, nil
+	return &Engine{connCtx: connCtx, socketURL: socketURL, log: slog.Default()}, nil
 }
 
 // ctx derives a call context that carries the bindings client but is
@@ -90,7 +94,22 @@ func (e *Engine) EnsureNetwork(ctx context.Context, name string) error {
 		return nil
 	}
 	_, err = network.Create(c, &nettypes.Network{Name: name, DNSEnabled: true})
-	return err
+	if isAlreadyExists(err) {
+		return nil // lost a race with a concurrent caller
+	}
+	return mapErr(err)
+}
+
+// isAlreadyExists reports whether err is a Podman 409 / "already exists".
+func isAlreadyExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	var em *errorhandling.ErrorModel
+	if errors.As(err, &em) && em.ResponseCode == http.StatusConflict {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already exists")
 }
 
 func (e *Engine) ConnectNetwork(ctx context.Context, containerID, networkName string) error {
@@ -171,8 +190,16 @@ func (e *Engine) StartContainer(ctx context.Context, id string) error {
 func (e *Engine) StopContainer(ctx context.Context, id string, timeout time.Duration) error {
 	c, done := e.ctx(ctx)
 	defer done()
-	secs := uint((timeout + time.Second - 1) / time.Second) // round up
-	return mapErr(containers.Stop(c, id, &containers.StopOptions{Timeout: ptr(secs)}))
+	return mapErr(containers.Stop(c, id, &containers.StopOptions{Timeout: ptr(stopSeconds(timeout))}))
+}
+
+// stopSeconds converts a stop timeout to whole seconds, rounding up and
+// clamping negative values to 0.
+func stopSeconds(d time.Duration) uint {
+	if d <= 0 {
+		return 0
+	}
+	return uint((d + time.Second - 1) / time.Second)
 }
 
 func (e *Engine) RemoveContainer(ctx context.Context, id string, force bool) error {
