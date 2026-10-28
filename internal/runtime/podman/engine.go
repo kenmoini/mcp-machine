@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -230,8 +231,22 @@ func (e *Engine) InspectContainer(ctx context.Context, id string) (runtime.Conta
 	}
 	if d.NetworkSettings != nil {
 		info.Ports = inspectPorts(d.NetworkSettings.Ports)
+		info.Networks = sortedNetworkNames(d.NetworkSettings.Networks)
 	}
 	return info, nil
+}
+
+// sortedNetworkNames returns the sorted keys of an inspect network map.
+func sortedNetworkNames(m map[string]*define.InspectAdditionalNetwork) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for name := range m {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // inspectPorts converts inspect-style port bindings ("3000/tcp" ->
@@ -270,6 +285,10 @@ func (e *Engine) ListContainers(ctx context.Context, labels map[string]string) (
 			State:    lc.State,
 			Labels:   lc.Labels,
 			ExitCode: int(lc.ExitCode),
+		}
+		if len(lc.Networks) > 0 {
+			info.Networks = append([]string(nil), lc.Networks...)
+			slices.Sort(info.Networks)
 		}
 		if len(lc.Names) > 0 {
 			info.Name = lc.Names[0]

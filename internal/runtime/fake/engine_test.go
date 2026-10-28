@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -500,5 +501,36 @@ func TestFakeFailNext(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("Calls = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestFakeConnectNetworkShowsInInspectAndList(t *testing.T) {
+	ctx := context.Background()
+	e := fake.New()
+	id, err := e.CreateContainer(ctx, runtime.ContainerSpec{Name: "n", Image: "img", Network: "b-net"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ConnectNetwork(ctx, id, "a-net"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ConnectNetwork(ctx, id, "a-net"); err != nil { // idempotent
+		t.Fatal(err)
+	}
+	info, err := e.InspectContainer(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a-net", "b-net"}; !slices.Equal(info.Networks, want) {
+		t.Fatalf("Networks = %v, want %v", info.Networks, want)
+	}
+	info.Networks[0] = "mutated" // returned slice must be a copy
+	again, _ := e.InspectContainer(ctx, id)
+	if again.Networks[0] != "a-net" {
+		t.Fatalf("Networks aliased: %v", again.Networks)
+	}
+	list, err := e.ListContainers(ctx, nil)
+	if err != nil || len(list) != 1 || !slices.Contains(list[0].Networks, "a-net") {
+		t.Fatalf("List = %+v, err %v", list, err)
 	}
 }

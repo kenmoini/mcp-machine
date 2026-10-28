@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -238,9 +239,17 @@ func TestPodmanEngineEndToEnd(t *testing.T) {
 		if err := eng.ConnectNetwork(ctx, id, itNetwork); err != nil {
 			t.Fatalf("ConnectNetwork: %v", err)
 		}
-		// ContainerInfo has no network field, so only assert inspect succeeds.
-		if _, err := eng.InspectContainer(ctx, id); err != nil {
+		info, err := eng.InspectContainer(ctx, id)
+		if err != nil {
 			t.Fatalf("InspectContainer: %v", err)
+		}
+		if !slices.Contains(info.Networks, itNetwork) {
+			t.Fatalf("InspectContainer Networks = %v, want to contain %q", info.Networks, itNetwork)
+		}
+		// Stop quickly so the cleanup force-remove does not wait out the
+		// default stop timeout on `sleep` (which ignores SIGTERM as PID 1).
+		if err := eng.StopContainer(ctx, id, 1*time.Second); err != nil {
+			t.Fatalf("StopContainer: %v", err)
 		}
 	})
 }

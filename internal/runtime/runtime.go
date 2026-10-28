@@ -66,6 +66,7 @@ type ContainerInfo struct {
 	Labels                 map[string]string
 	ExitCode               int
 	Ports                  []PortMapping
+	Networks               []string // names of attached networks, sorted; may be empty
 }
 
 // BuildRequest describes an image build.

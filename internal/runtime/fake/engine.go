@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -132,6 +133,9 @@ func (e *Engine) ConnectNetwork(_ context.Context, containerID, network string) 
 		return err
 	}
 	e.conns = append(e.conns, [2]string{containerID, network})
+	if c, ok := e.find(containerID); ok {
+		c.info.Networks = addNetwork(c.info.Networks, network)
+	}
 	return nil
 }
 
@@ -198,6 +202,9 @@ func (e *Engine) CreateContainer(_ context.Context, spec runtime.ContainerSpec) 
 			Ports:  append([]runtime.PortMapping(nil), spec.Ports...),
 		},
 		exit: newExitState(),
+	}
+	if spec.Network != "" {
+		e.containers[id].info.Networks = []string{spec.Network}
 	}
 	e.order = append(e.order, id)
 	return id, nil
@@ -468,7 +475,18 @@ func copyLabels(in map[string]string) map[string]string {
 	return out
 }
 
+// addNetwork returns nets with name added, deduplicated and sorted.
+func addNetwork(nets []string, name string) []string {
+	if slices.Contains(nets, name) {
+		return nets
+	}
+	nets = append(nets, name)
+	slices.Sort(nets)
+	return nets
+}
+
 func cloneInfo(in runtime.ContainerInfo) runtime.ContainerInfo {
+	in.Networks = append([]string(nil), in.Networks...)
 	in.Labels = copyLabels(in.Labels)
 	in.Ports = append([]runtime.PortMapping(nil), in.Ports...)
 	return in
