@@ -182,6 +182,108 @@ func TestWriterUpdateKeepsPosition(t *testing.T) {
 	}
 }
 
+const mergeOriginal = `# head of servers
+servers:
+  # head comment on alpha
+  - name: alpha # inline on alpha
+    type: remote
+    remote: # remote section comment
+      url: https://alpha.example.com/mcp
+      transport: http # http | sse | auto
+      headers: { Authorization: "Bearer ${TOK}" } # flow headers
+    container: # optional overrides
+      image: docker.io/library/node:20
+      volumes: ["/srv/a:/a:ro"]
+  - name: beta
+    type: remote
+    remote:
+      url: https://beta.example.com/mcp
+`
+
+func alphaMerged() config.ServerSpec {
+	return config.ServerSpec{
+		Name: "alpha",
+		Type: "remote",
+		Remote: &config.RemoteSpec{
+			URL:       "https://alpha2.example.com/mcp",
+			Transport: "http",
+			Headers:   map[string]string{"Authorization": "Bearer ${TOK}"},
+		},
+		Container: &config.ContainerOverrides{
+			Image:   "docker.io/library/node:20",
+			Volumes: []string{"/srv/a:/a:ro"},
+		},
+	}
+}
+
+func TestWriterUpdatePreservesInEntryComments(t *testing.T) {
+	p := newTestConfig(t, mergeOriginal)
+	if err := (config.Writer{Path: p}).UpdateServer("alpha", alphaMerged()); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, p)
+	for _, want := range []string{
+		"# head comment on alpha",
+		"- name: alpha # inline on alpha",
+		"remote: # remote section comment",
+		"transport: http # http | sse | auto",
+		`headers: {Authorization: "Bearer ${TOK}"} # flow headers`, // yaml.v3 tightens flow-map spacing
+		"container: # optional overrides",
+		`volumes: ["/srv/a:/a:ro"]`,
+		"url: https://alpha2.example.com/mcp",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "https://alpha.example.com") {
+		t.Errorf("old url still present:\n%s", got)
+	}
+	// Key order unchanged: name, type, remote, container; remote: url, transport, headers.
+	idx := func(s string) int { return strings.Index(got, s) }
+	order := []string{"name: alpha", "type: remote", "remote:", "url:", "transport:", "headers:", "container:", "name: beta"}
+	for i := 1; i < len(order); i++ {
+		if idx(order[i-1]) >= idx(order[i]) {
+			t.Errorf("order broken between %q and %q:\n%s", order[i-1], order[i], got)
+		}
+	}
+}
+
+func TestWriterUpdateRemovesClearedSection(t *testing.T) {
+	p := newTestConfig(t, mergeOriginal)
+	s := alphaMerged()
+	s.Container = nil
+	if err := (config.Writer{Path: p}).UpdateServer("alpha", s); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, p)
+	if strings.Contains(got, "container") || strings.Contains(got, "node:20") {
+		t.Errorf("container not removed:\n%s", got)
+	}
+	if !strings.Contains(got, "transport: http # http | sse | auto") || !strings.Contains(got, "name: beta") {
+		t.Errorf("other content lost:\n%s", got)
+	}
+}
+
+func TestWriterUpdateAddsNewKey(t *testing.T) {
+	p := newTestConfig(t, mergeOriginal)
+	s := alphaMerged()
+	s.Env = map[string]string{"A": "b"}
+	if err := (config.Writer{Path: p}).UpdateServer("alpha", s); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, p)
+	if !strings.Contains(got, "env:") || !strings.Contains(got, "A: b") {
+		t.Fatalf("env not added:\n%s", got)
+	}
+	if strings.Index(got, "env:") < strings.Index(got, "container:") || strings.Index(got, "env:") > strings.Index(got, "name: beta") {
+		t.Errorf("env should be appended at end of alpha entry:\n%s", got)
+	}
+	if !strings.Contains(got, "container: # optional overrides") {
+		t.Errorf("comment lost:\n%s", got)
+	}
+}
+
 func TestWriterUpdateMissing(t *testing.T) {
 	p := newTestConfig(t, writerOriginal)
 	err := (config.Writer{Path: p}).UpdateServer("nope", gammaSpec())

@@ -31,9 +31,10 @@ func (w Writer) AddServer(s ServerSpec) error {
 	})
 }
 
-// UpdateServer replaces the server called name with s, keeping its position in
-// the list and any comments attached to the old entry. It is an error if no
-// such server exists, or if s.Name collides with a different server.
+// UpdateServer merges s into the existing entry for name, keeping its position
+// in the list, its key order and every comment and quoting style of values
+// that did not change (see mergeMapping). It is an error if no such server
+// exists, or if s.Name collides with a different server.
 func (w Writer) UpdateServer(name string, s ServerSpec) error {
 	return w.edit(func(seq *yaml.Node) error {
 		i := findServer(seq, name)
@@ -47,9 +48,7 @@ func (w Writer) UpdateServer(name string, s ServerSpec) error {
 		if err != nil {
 			return err
 		}
-		old := seq.Content[i]
-		n.HeadComment, n.LineComment, n.FootComment = old.HeadComment, old.LineComment, old.FootComment
-		seq.Content[i] = n
+		mergeMapping(seq.Content[i], n)
 		return nil
 	})
 }
@@ -163,6 +162,72 @@ func findServer(seq *yaml.Node, name string) int {
 		}
 	}
 	return -1
+}
+
+// mergeMapping merges nw into old in place. Keys present in both keep the old
+// key node (and its comments) and have their values merged; keys only in old
+// are removed (omitempty means the field is now empty); keys only in nw are
+// appended in nw's order.
+func mergeMapping(old, nw *yaml.Node) {
+	newIdx := make(map[string]int, len(nw.Content)/2)
+	for j := 0; j+1 < len(nw.Content); j += 2 {
+		newIdx[nw.Content[j].Value] = j
+	}
+	merged := make([]*yaml.Node, 0, len(nw.Content))
+	seen := make(map[string]bool, len(newIdx))
+	for i := 0; i+1 < len(old.Content); i += 2 {
+		k := old.Content[i]
+		j, ok := newIdx[k.Value]
+		if !ok || seen[k.Value] {
+			continue
+		}
+		seen[k.Value] = true
+		merged = append(merged, k, mergeValue(old.Content[i+1], nw.Content[j+1]))
+	}
+	for j := 0; j+1 < len(nw.Content); j += 2 {
+		if !seen[nw.Content[j].Value] {
+			merged = append(merged, nw.Content[j], nw.Content[j+1])
+		}
+	}
+	old.Content = merged
+}
+
+// mergeValue returns the node to use in place of old given the freshly
+// encoded nw. Mappings merge recursively; an unchanged scalar or sequence
+// keeps the old node untouched (preserving quoting and flow style); a changed
+// one is replaced by nw carrying over the old comments (and, for sequences,
+// the old flow style).
+func mergeValue(old, nw *yaml.Node) *yaml.Node {
+	switch {
+	case old.Kind == yaml.MappingNode && nw.Kind == yaml.MappingNode:
+		mergeMapping(old, nw)
+		return old
+	case old.Kind == yaml.ScalarNode && nw.Kind == yaml.ScalarNode:
+		if old.Value == nw.Value && old.Tag == nw.Tag {
+			return old
+		}
+	case old.Kind == yaml.SequenceNode && nw.Kind == yaml.SequenceNode:
+		if sameScalars(old, nw) {
+			return old
+		}
+		nw.Style |= old.Style & yaml.FlowStyle
+	}
+	nw.HeadComment, nw.LineComment, nw.FootComment = old.HeadComment, old.LineComment, old.FootComment
+	return nw
+}
+
+// sameScalars reports whether a and b are sequences of equal scalars.
+func sameScalars(a, b *yaml.Node) bool {
+	if len(a.Content) != len(b.Content) {
+		return false
+	}
+	for i := range a.Content {
+		x, y := a.Content[i], b.Content[i]
+		if x.Kind != yaml.ScalarNode || y.Kind != yaml.ScalarNode || x.Value != y.Value || x.Tag != y.Tag {
+			return false
+		}
+	}
+	return true
 }
 
 // specNode renders s as a block mapping node. Nil sections and empty fields
