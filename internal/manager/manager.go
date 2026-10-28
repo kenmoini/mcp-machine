@@ -67,7 +67,8 @@ type Manager struct {
 	// reconcileMu serializes Apply. It is held while Apply waits on runners;
 	// nothing else takes it, so commands (Start, Stop, ...) never wait for it.
 	reconcileMu sync.Mutex
-	applied     bool // the first Apply (adoption, network join) has run; guarded by reconcileMu
+	adopted     bool // the adoption scan has listed the containers; guarded by reconcileMu
+	joined      bool // the network join has been attempted; guarded by reconcileMu
 
 	mu      sync.Mutex // guards the fields below; never held while waiting on a runner
 	cfg     *config.Config

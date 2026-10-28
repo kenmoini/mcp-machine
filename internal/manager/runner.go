@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"strings"
 	"sync"
 	"time"
 
@@ -550,6 +551,10 @@ func (r *runner) create(ctx context.Context) {
 	if transport == "http" {
 		spec.Ports = httpPorts(spec.Ports, r.resolved.HTTP.Port, r.m.opts.InContainer)
 	}
+	if err := r.clearName(ctx, spec.Name); err != nil {
+		r.failAttempt(ctx, err)
+		return
+	}
 	id, err := r.m.engine.CreateContainer(ctx, spec)
 	if err != nil {
 		r.failAttempt(ctx, fmt.Errorf("create container: %w", err))
@@ -561,6 +566,31 @@ func (r *runner) create(ctx context.Context) {
 		return
 	}
 	r.attachAndStart(ctx)
+}
+
+// clearName removes a container that already holds name, so the create that
+// follows does not fail with "name in use": a leftover managed container
+// (any hash; adoption failed to remove it or could not list it), or an
+// unlabelled one squatting on the reserved mcpm- name. A container carrying
+// some other value of the managed label is left alone.
+func (r *runner) clearName(ctx context.Context, name string) error {
+	info, err := r.m.engine.InspectContainer(ctx, name)
+	if err != nil {
+		return nil // not found, or unknown: CreateContainer reports any real problem
+	}
+	managed, labelled := info.Labels[store.LabelManaged]
+	switch {
+	case managed == "true":
+	case !labelled && strings.HasPrefix(name, store.ContainerPrefix):
+	default:
+		return nil
+	}
+	r.m.log.Warn("manager: removing container that holds the server's name", "server", r.name, "container", info.ID, "name", name, "labels", info.Labels)
+	_ = r.m.engine.StopContainer(ctx, info.ID, r.m.config().Podman.StopTimeout)
+	if err := r.m.engine.RemoveContainer(ctx, info.ID, true); err != nil && !errors.Is(err, runtime.ErrNotFound) {
+		return fmt.Errorf("remove container %s holding name %s: %w", info.ID, name, err)
+	}
+	return nil
 }
 
 // bindSession watches sess for loss and binds the facade to it: the last

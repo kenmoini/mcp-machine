@@ -344,3 +344,83 @@ func TestApplyAfterRemoveRecreates(t *testing.T) {
 		t.Errorf("recreated server is Paused: %+v", got)
 	}
 }
+
+func TestApplyDuringPendingRemoveRecreates(t *testing.T) {
+	h := newHarness(t, manager.Options{})
+	st, _ := h.ready()
+
+	// The Remove is queued but its caller gives up at once; the Apply that
+	// follows must wait for it rather than mistake the runner for a live one.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = h.m.Remove(ctx, "a")
+	h.apply()
+	serveNext(t, h, st.ContainerID)
+	if got := waitState(t, h.reg, "a", store.StateReady); got.Paused {
+		t.Errorf("recreated server is Paused: %+v", got)
+	}
+	if _, err := h.eng.InspectContainer(context.Background(), st.ContainerID); !errors.Is(err, runtime.ErrNotFound) {
+		t.Errorf("old container not removed: %v", err)
+	}
+}
+
+func TestAdoptRetriesAfterListFailure(t *testing.T) {
+	h := newHarness(t, manager.Options{})
+	h.eng.Seed(runtime.ContainerInfo{
+		ID:     "seed-1",
+		Name:   store.ContainerName("a"),
+		Image:  "img:1",
+		State:  "exited",
+		Labels: store.Labels("a", h.hash(), "stdio"),
+	})
+	h.eng.FailNext("ListContainers", errors.New("socket not ready"))
+	if err := h.m.Apply(context.Background(), h.cfg); err == nil || !strings.Contains(err.Error(), "socket not ready") {
+		t.Fatalf("first Apply err = %v, want the list failure", err)
+	}
+	if _, ok := h.m.Facade("a"); ok {
+		t.Error("a runner was started although the containers could not be listed")
+	}
+	if n := h.count("CreateContainer"); n != 0 {
+		t.Errorf("CreateContainer called %d times after the failed scan", n)
+	}
+
+	h.apply()
+	serveBackend(t, h.eng, "seed-1")
+	st := waitState(t, h.reg, "a", store.StateReady)
+	if st.ContainerID != "seed-1" {
+		t.Errorf("ContainerID = %q, want the adopted seed-1", st.ContainerID)
+	}
+	if n := h.count("ListContainers"); n != 2 {
+		t.Errorf("ListContainers called %d times, want 2", n)
+	}
+	if n := h.count("CreateContainer"); n != 0 {
+		t.Errorf("CreateContainer called %d times, want 0", n)
+	}
+}
+
+func TestCreateReplacesConflictingContainer(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		labels map[string]string
+	}{
+		{"unlabelled", nil},
+		{"managed-without-server", map[string]string{store.LabelManaged: "true"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, manager.Options{})
+			h.eng.Seed(runtime.ContainerInfo{
+				ID: "seed-1", Name: store.ContainerName("a"), Image: "img:0", State: "running",
+				Labels: tc.labels,
+			})
+			h.apply()
+			serveNext(t, h, "seed-1")
+			st := waitState(t, h.reg, "a", store.StateReady)
+			if _, err := h.eng.InspectContainer(context.Background(), "seed-1"); !errors.Is(err, runtime.ErrNotFound) {
+				t.Errorf("conflicting container not removed: %v", err)
+			}
+			if st.ContainerID == "seed-1" {
+				t.Error("conflicting container was used")
+			}
+		})
+	}
+}

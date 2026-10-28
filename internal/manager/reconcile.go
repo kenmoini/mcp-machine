@@ -28,7 +28,9 @@ import (
 //
 // The first Apply also adopts containers left by a previous process (see
 // adopt) and, when MCP Machine runs in a container, joins it to the servers'
-// network. Applying the same config twice makes no engine calls.
+// network. If the containers cannot be listed, Apply returns the error
+// without starting anything, and the next Apply scans again. Applying the
+// same config twice makes no engine calls.
 //
 // Calls are serialized: a concurrent Apply waits for the one in progress. It
 // is safe to call alongside Start, Stop and the other commands.
@@ -73,23 +75,33 @@ func (m *Manager) Apply(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
-	var adopted map[string]runtime.ContainerInfo
-	if !m.applied {
-		m.applied = true
-		m.joinNetwork(ctx, cfg)
-		var err error
-		adopted, err = m.adopt(ctx, cfg, desired)
-		report(err)
-	}
-
 	m.mu.Lock()
 	var gone []*runner
+	owned := make(map[string]bool, len(m.runners))
 	for name, r := range m.runners {
+		owned[name] = true
 		if !inConfig[name] {
 			gone = append(gone, r)
 		}
 	}
 	m.mu.Unlock()
+
+	if !m.joined {
+		m.joined = true
+		m.joinNetwork(ctx, cfg)
+	}
+	var adopted map[string]runtime.ContainerInfo
+	if !m.adopted {
+		listed, err := m.adopt(ctx, cfg, desired, owned)
+		if errors.Is(err, errListContainers) {
+			// Starting servers now could destroy containers that the next
+			// scan would adopt: start nothing, and scan again next time.
+			return err
+		}
+		m.adopted = true
+		adopted = listed
+		report(err)
+	}
 
 	// Servers are independent and stopping a container can take the whole
 	// stop timeout, so they are reconciled concurrently.
@@ -173,8 +185,11 @@ func (m *Manager) settledRunner(ctx context.Context, name string) (*runner, erro
 		case <-r.done:
 			// Removed: it forgot itself before ending. Look again.
 			m.mu.Lock()
-			still := m.runners[name] == r
+			closed, still := m.closed, m.runners[name] == r
 			m.mu.Unlock()
+			if closed {
+				return nil, ErrClosed // Close ended it
+			}
 			if still {
 				return nil, fmt.Errorf("manager: server %q: runner ended without being forgotten", name)
 			}
@@ -209,24 +224,30 @@ func (m *Manager) spawn(cfg *config.Config, spec config.ServerSpec, adopt *runti
 	return nil
 }
 
-// adopt lists the managed containers left by a previous process. A container
+// errListContainers marks adopt's failure to list containers: the scan did
+// not happen and must be retried.
+var errListContainers = errors.New("manager: list containers")
+
+// adopt lists the managed containers left by a previous process. Containers
+// of servers in owned (which already have a runner, from an Apply whose scan
+// failed) are left to their runner. Of the others, a container
 // whose server is desired with the same hash is kept for that server's
 // runner: an http-mode one as it is (a running one is connected to without a
 // restart), a stdio one stopped first if it is running, since a running
 // container's stdio cannot be re-attached safely. Every other managed
 // container (stale hash, disabled or unknown server, duplicate) is stopped
 // and removed.
-func (m *Manager) adopt(ctx context.Context, cfg *config.Config, desired map[string]string) (map[string]runtime.ContainerInfo, error) {
+func (m *Manager) adopt(ctx context.Context, cfg *config.Config, desired map[string]string, owned map[string]bool) (map[string]runtime.ContainerInfo, error) {
 	list, err := m.engine.ListContainers(ctx, map[string]string{store.LabelManaged: "true"})
 	if err != nil {
-		return nil, fmt.Errorf("manager: list containers: %w", err)
+		return nil, fmt.Errorf("%w: %w", errListContainers, err)
 	}
 	timeout := cfg.Podman.StopTimeout
 	adopted := map[string]runtime.ContainerInfo{}
 	var errs []error
 	for _, info := range list {
 		lbl, ok := store.ParseLabels(info.Labels)
-		if !ok {
+		if !ok || owned[lbl.Name] {
 			continue
 		}
 		hash, want := desired[lbl.Name]
