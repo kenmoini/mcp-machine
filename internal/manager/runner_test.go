@@ -595,6 +595,17 @@ func TestRunnerPullsMissingImage(t *testing.T) {
 	})
 }
 
+// useBuild turns server a into a build-type server whose resolve yields a
+// build plan.
+func (h *harness) useBuild() {
+	h.cfg.Servers[0] = config.ServerSpec{
+		Name:  "a",
+		Type:  "build",
+		Build: &config.BuildSpec{Repo: "https://example.com/a.git", Ref: "main"},
+	}
+	h.res.res = buildResolved()
+}
+
 func buildResolved() sources.Resolved {
 	res := stdioResolved()
 	res.Container.Image = ""
@@ -604,7 +615,7 @@ func buildResolved() sources.Resolved {
 
 func TestRunnerBuildsWhenPlanned(t *testing.T) {
 	h := newHarness(t, manager.Options{})
-	h.res.res = buildResolved()
+	h.useBuild()
 	st, _ := h.ready()
 
 	calls := h.bld.Calls()
@@ -628,7 +639,7 @@ func TestRunnerBuildsWhenPlanned(t *testing.T) {
 
 func TestRunnerRebuild(t *testing.T) {
 	h := newHarness(t, manager.Options{})
-	h.res.res = buildResolved()
+	h.useBuild()
 	st, _ := h.ready()
 
 	h.bld.mu.Lock()
@@ -656,19 +667,114 @@ func TestRunnerRebuild(t *testing.T) {
 	}
 }
 
-func TestRunnerRebuildRejectsNonBuildServer(t *testing.T) {
+func TestRebuildOnNonBuildServerDoesNotDisturbIt(t *testing.T) {
 	h := newHarness(t, manager.Options{})
-	h.ready()
+	ctx := context.Background()
+
+	// During Connecting: the runner is busy dialing a backend that has not
+	// answered yet. The rejected Rebuild must not cancel that dial.
+	h.apply()
+	waitState(t, h.reg, "a", store.StateConnecting)
+	if err := h.m.Rebuild(ctx, "a"); err == nil {
+		t.Fatal("Rebuild of a command server succeeded during Connecting, want an error")
+	}
+	serveBackend(t, h.eng, store.ContainerName("a"))
+	st := waitState(t, h.reg, "a", store.StateReady)
+
+	// During Ready: rejected without touching the container or the session.
 	before := len(h.eng.Calls())
+	if err := h.m.Rebuild(ctx, "a"); err == nil {
+		t.Fatal("Rebuild of a command server succeeded during Ready, want an error")
+	}
+	if got, _ := h.reg.Get("a"); got.State != store.StateReady || got.ContainerID != st.ContainerID {
+		t.Errorf("after rejected Rebuild status = %+v, want Ready on %s", got, st.ContainerID)
+	}
+	if calls := h.eng.Calls()[before:]; len(calls) != 0 {
+		t.Errorf("rejected Rebuild made engine calls: %v", calls)
+	}
+	f, _ := h.m.Facade("a")
+	if got := listTools(t, f.Server()); !slices.Contains(got, "ping") {
+		t.Errorf("facade tools after rejected Rebuild = %v", got)
+	}
+	if n := len(h.bld.Calls()); n != 0 {
+		t.Errorf("builder called %d times", n)
+	}
+}
+
+func TestExitDuringPendingPreemptIsNotLost(t *testing.T) {
+	h := newHarness(t, manager.Options{})
+	st, _ := h.ready()
+
+	// The exit and a command that turns out to be a no-op arrive together;
+	// the exit must still be handled.
+	h.eng.Exit(st.ContainerID, 1)
 	if err := h.m.Rebuild(context.Background(), "a"); err == nil {
-		t.Fatal("Rebuild of an image server succeeded, want an error")
+		t.Fatal("Rebuild of a command server succeeded, want an error")
 	}
-	if got, _ := h.reg.Get("a"); got.State != store.StateReady {
-		t.Errorf("state after rejected Rebuild = %s, want ready", got.State)
+	waitFor(t, h.reg, "a", "exit failure", func(s store.Status, ok bool) bool {
+		return ok && s.State == store.StateFailed && strings.Contains(s.Error, "exited with code 1")
+	})
+	h.clk.Advance(time.Second)
+	serveNext(t, h, st.ContainerID)
+	if got := waitState(t, h.reg, "a", store.StateReady); got.Restarts != 1 {
+		t.Errorf("Restarts = %d, want 1", got.Restarts)
 	}
-	if calls := h.eng.Calls()[before:]; slices.Contains(calls, "StopContainer") {
-		t.Errorf("rejected Rebuild touched the container: %v", calls)
+}
+
+func TestSessionLossBeforeExitKeepsExitCode(t *testing.T) {
+	h := newHarness(t, manager.Options{})
+	st, _ := h.ready()
+	h.eng.SetLogs(st.ContainerID, []runtime.LogLine{{Stream: "stderr", Text: "fatal: out of memory"}})
+
+	// A real engine may close the attach stream before it records the exit.
+	peer, ok := h.eng.Peer(st.ContainerID)
+	if !ok {
+		t.Fatal("no peer")
 	}
+	_ = peer.Close()
+	waitFor(t, h.reg, "a", "session loss", func(s store.Status, ok bool) bool {
+		return ok && s.State == store.StateFailed && s.Error == "backend session closed"
+	})
+	h.eng.Exit(st.ContainerID, 2)
+	got := waitFor(t, h.reg, "a", "exit error", func(s store.Status, ok bool) bool {
+		return ok && strings.HasPrefix(s.Error, "container exited")
+	})
+	if want := "container exited with code 2; last log lines: fatal: out of memory"; got.Error != want {
+		t.Errorf("error = %q, want %q", got.Error, want)
+	}
+	if got.State != store.StateFailed {
+		t.Errorf("state = %s, want failed", got.State)
+	}
+}
+
+func TestRemoveWithExpiredContextStillDeletesRunner(t *testing.T) {
+	h := newHarness(t, manager.Options{})
+	st, _ := h.ready()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	_ = h.m.Remove(ctx, "a") // may report ctx's error; the removal still completes
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, inReg := h.reg.Get("a")
+		_, hasFacade := h.m.Facade("a")
+		if !inReg && !hasFacade {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("runner not forgotten: registry %v, facade %v", inReg, hasFacade)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := h.eng.InspectContainer(context.Background(), st.ContainerID); !errors.Is(err, runtime.ErrNotFound) {
+		t.Errorf("container not removed: %v", err)
+	}
+
+	h.apply()
+	serveNext(t, h, st.ContainerID)
+	waitState(t, h.reg, "a", store.StateReady)
 }
 
 func TestRunnerRestart(t *testing.T) {

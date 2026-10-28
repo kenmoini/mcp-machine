@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
-	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +34,7 @@ const (
 	evShutdown    // manager closing: drop the session, leave the container
 	evExit        // the container of generation gen exited with code
 	evSessionLost // the session of generation gen ended
+	evRecover     // a preempting command was withdrawn: resume abandoned work
 )
 
 // preempts reports whether a command must interrupt whatever the runner is
@@ -85,9 +84,13 @@ type runner struct {
 	rwc      io.ReadWriteCloser
 	retries  int              // consecutive automatic retries; reset by Start
 	retryC   <-chan time.Time // pending retry timer; nil when none
-	// awaitExit: the last dial failed before the container's exit was
+	// awaitExit: the last failure happened before the container's exit was
 	// visible; an exit of the same generation replaces the error.
 	awaitExit bool
+	// abandoned: an attempt was cancelled by an interrupt and left the state
+	// mid-pipeline. The preempting command that caused it settles the state;
+	// if that command turns out to be a no-op, the attempt is re-run.
+	abandoned bool
 }
 
 func newRunner(m *Manager, cfg *config.Config, spec config.ServerSpec) *runner {
@@ -154,24 +157,25 @@ func (r *runner) post(ev event) {
 	}
 }
 
-// send delivers a command and waits for the runner's answer.
+// send delivers a command and waits for the runner's answer. Once the
+// command is queued it runs to completion even if ctx ends first.
 func (r *runner) send(ctx context.Context, kind evKind) error {
 	if kind.preempts() {
 		r.interrupt()
 	}
 	ev := event{kind: kind, reply: make(chan error, 1)}
 	select {
-	case r.events <- ev:
-	case <-r.done:
-		if kind.preempts() {
-			r.uninterrupt()
+	case r.events <- ev: // queue it if there is room, whatever the state of ctx
+	default:
+		select {
+		case r.events <- ev:
+		case <-r.done:
+			r.withdraw(kind)
+			return r.gone()
+		case <-ctx.Done():
+			r.withdraw(kind)
+			return ctx.Err()
 		}
-		return r.gone()
-	case <-ctx.Done():
-		if kind.preempts() {
-			r.uninterrupt()
-		}
-		return ctx.Err()
 	}
 	select {
 	case err := <-ev.reply:
@@ -186,6 +190,17 @@ func (r *runner) send(ctx context.Context, kind evKind) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// withdraw undoes the interrupt of a command that was never queued. The
+// interrupt may already have cancelled an attempt, so the runner is asked to
+// resume it.
+func (r *runner) withdraw(kind evKind) {
+	if !kind.preempts() {
+		return
+	}
+	r.uninterrupt()
+	go r.post(event{kind: evRecover})
 }
 
 func (r *runner) gone() error { return fmt.Errorf("%w %q", ErrUnknownServer, r.name) }
@@ -248,6 +263,8 @@ func (r *runner) handle(ev event) bool {
 		reply(ev, err)
 		if err == nil {
 			r.provision(r.beginAttempt(), res, true)
+		} else {
+			r.recoverAbandoned() // rejected: nothing settled the interrupted attempt
 		}
 	case evRemove:
 		err := r.remove()
@@ -262,8 +279,20 @@ func (r *runner) handle(ev event) bool {
 		r.onExit(ev)
 	case evSessionLost:
 		r.onSessionLost(ev)
+	case evRecover:
+		r.recoverAbandoned()
 	}
 	return false
+}
+
+// recoverAbandoned re-runs an attempt that an interrupt cancelled when no
+// preempting command is left to settle the state.
+func (r *runner) recoverAbandoned() {
+	if !r.abandoned || r.interrupted() {
+		return
+	}
+	r.abandoned = false
+	r.launch(false)
 }
 
 // set records a state transition in the registry.
@@ -322,6 +351,7 @@ func (r *runner) teardown() {
 func (r *runner) fail(err error) {
 	r.teardown()
 	r.awaitExit = false
+	r.abandoned = false
 	r.retryC = nil
 	if r.retries < r.m.opts.MaxRetries {
 		r.retryC = r.m.opts.Clock.After(backoff(r.retries, r.m.opts.MaxBackoff))
@@ -330,10 +360,12 @@ func (r *runner) fail(err error) {
 }
 
 // failAttempt is fail for errors inside a start pipeline. An interrupted
-// attempt is abandoned quietly: the preempting command decides the state.
+// attempt is abandoned quietly: the preempting command decides the state
+// (and recoverAbandoned re-runs it if that command is a no-op).
 func (r *runner) failAttempt(ctx context.Context, err error) {
 	if ctx.Err() != nil {
 		r.teardown()
+		r.abandoned = true
 		return
 	}
 	r.fail(err)
@@ -466,142 +498,19 @@ func (r *runner) discardContainer(ctx context.Context) error {
 	return nil
 }
 
-// create replaces any previous container with a fresh one and starts it.
-func (r *runner) create(ctx context.Context) {
-	r.set(store.StateCreating, "")
-	if err := r.discardContainer(ctx); err != nil {
-		r.failAttempt(ctx, err)
-		return
-	}
-	cfg := r.m.config()
-	if cfg.Podman.Network != "" {
-		if err := r.m.engine.EnsureNetwork(ctx, cfg.Podman.Network); err != nil {
-			r.failAttempt(ctx, fmt.Errorf("ensure network %s: %w", cfg.Podman.Network, err))
-			return
-		}
-	}
-	spec := *r.resolved.Container
-	if spec.Name == "" {
-		spec.Name = store.ContainerName(r.name)
-	}
-	if spec.Network == "" {
-		spec.Network = cfg.Podman.Network
-	}
-	spec.Image = r.image
-	labels := maps.Clone(spec.Labels)
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	maps.Copy(labels, store.Labels(r.name, r.hash, "stdio"))
-	spec.Labels = labels
-	spec.Stdin = true
-	id, err := r.m.engine.CreateContainer(ctx, spec)
-	if err != nil {
-		r.failAttempt(ctx, fmt.Errorf("create container: %w", err))
-		return
-	}
-	r.status.ContainerID = id
-	r.attachAndStart(ctx)
-}
-
-// attachAndStart attaches to the container's stdio (before starting it, so
-// no output is lost), starts it, and connects the facade to it.
-func (r *runner) attachAndStart(ctx context.Context) {
-	id := r.status.ContainerID
-	rwc, err := r.m.engine.Attach(ctx, id)
-	if err != nil {
-		r.failAttempt(ctx, fmt.Errorf("attach: %w", err))
-		return
-	}
-	if err := r.m.engine.StartContainer(ctx, id); err != nil {
-		_ = rwc.Close()
-		r.failAttempt(ctx, fmt.Errorf("start container: %w", err))
-		return
-	}
-	// Cancelling the attempt must unblock a dial stuck writing to a backend
-	// that never reads; context cancellation alone does not.
-	context.AfterFunc(ctx, func() { _ = rwc.Close() })
-	r.gen++
-	gen := r.gen
-	go r.waitExit(gen, id)
-	r.set(store.StateRunning, "")
-
-	r.set(store.StateConnecting, "")
-	// The session lives on ctx, the attempt's long-lived context, not a
-	// dial timeout: it must outlive the dial.
-	sess, err := proxy.DialIO(ctx, rwc, r.facade.ClientOptions())
-	if err != nil {
-		_ = rwc.Close()
-		if exitErr := r.exitedError(); exitErr != nil {
-			r.failAttempt(ctx, exitErr)
-			return
-		}
-		r.failAttempt(ctx, fmt.Errorf("connect: %w", err))
-		r.awaitExit = ctx.Err() == nil
-		return
-	}
-	r.sess, r.rwc = sess, rwc
-	go func() {
-		_ = sess.Wait()
-		r.post(event{kind: evSessionLost, gen: gen})
-	}()
-	if err := r.facade.Bind(ctx, sess); err != nil {
-		if exitErr := r.exitedError(); exitErr != nil {
-			err = exitErr
-		} else {
-			err = fmt.Errorf("bind: %w", err)
-		}
-		r.failAttempt(ctx, err)
-		return
-	}
-	r.set(store.StateReady, "")
-}
-
-// waitExit reports the exit of container id, started as generation gen. It
-// lives as long as the runner (not the attempt) so an exit that races a
-// failed dial is still seen and can explain it.
-func (r *runner) waitExit(gen uint64, id string) {
-	code, err := r.m.engine.Wait(r.ctx, id)
-	if err != nil {
-		if r.ctx.Err() == nil {
-			r.m.log.Debug("manager: wait failed", "server", r.name, "container", id, "err", err)
-		}
-		return
-	}
-	r.post(event{kind: evExit, gen: gen, code: code})
-}
-
-// exitedError returns the exit error if the container has exited, else nil.
-func (r *runner) exitedError() error {
-	if info, err := r.m.engine.InspectContainer(r.ctx, r.status.ContainerID); err == nil && info.State == "exited" {
-		return r.exitError(info.ExitCode)
-	}
-	return nil
-}
-
-// exitError describes a container exit with its last log lines.
-func (r *runner) exitError(code int) error {
-	tail := "(none)"
-	if lines, err := r.m.engine.Logs(r.ctx, r.status.ContainerID, exitLogLines); err == nil && len(lines) > 0 {
-		texts := make([]string, len(lines))
-		for i, l := range lines {
-			texts[i] = l.Text
-		}
-		tail = strings.Join(texts, " | ")
-	}
-	return fmt.Errorf("container exited with code %d; last log lines: %s", code, tail)
-}
-
+// onExit handles a container exit. It is processed even while a preempting
+// command is queued behind it: that command may turn out to be a no-op, and
+// fail's retry timer is cancelled by any command that does take over.
 func (r *runner) onExit(ev event) {
-	if ev.gen != r.gen || r.interrupted() {
-		return // a previous container, or a command is about to take over
+	if ev.gen != r.gen {
+		return // a previous container
 	}
 	switch r.status.State {
 	case store.StateRunning, store.StateConnecting, store.StateReady:
 		r.fail(r.exitError(ev.code))
 	case store.StateFailed:
-		// The dial hit EOF before the exit was visible; the exit code and
-		// logs explain the failure better.
+		// The dial or session hit EOF before the exit was visible; the exit
+		// code and logs explain the failure better.
 		if r.awaitExit {
 			r.awaitExit = false
 			r.status.Error = r.exitError(ev.code).Error()
@@ -610,20 +519,25 @@ func (r *runner) onExit(ev event) {
 	}
 }
 
+// onSessionLost handles the end of the backend session. An engine may close
+// the attach stream before it records the exit; then the exit that follows
+// replaces the generic error (awaitExit).
 func (r *runner) onSessionLost(ev event) {
-	if ev.gen != r.gen || r.interrupted() || r.status.State != store.StateReady {
+	if ev.gen != r.gen || r.status.State != store.StateReady {
 		return
 	}
-	err := r.exitedError()
-	if err == nil {
-		err = errors.New("backend session closed")
+	if err := r.exitedError(); err != nil {
+		r.fail(err)
+		return
 	}
-	r.fail(err)
+	r.fail(errors.New("backend session closed"))
+	r.awaitExit = true
 }
 
 // stop drops the session and stops the container, keeping it.
 func (r *runner) stop(paused bool) error {
 	r.retryC = nil
+	r.abandoned = false
 	r.teardown()
 	r.status.Paused = paused
 	if id := r.status.ContainerID; id != "" {
@@ -645,6 +559,7 @@ func (r *runner) stop(paused bool) error {
 // remove stops and removes the container and deletes the registry entry.
 func (r *runner) remove() error {
 	r.retryC = nil
+	r.abandoned = false
 	r.teardown()
 	wasStopped := r.status.State == store.StateStopped
 	r.set(store.StateRemoving, "")
@@ -657,12 +572,16 @@ func (r *runner) remove() error {
 			return err
 		}
 	}
-	r.m.reg.Delete(r.name)
+	r.m.forget(r)
 	return nil
 }
 
-// rebuildPlan resolves the server and checks that it is built from source.
+// rebuildPlan returns the server's build plan: the last resolved one, or a
+// fresh resolve if the server never got that far.
 func (r *runner) rebuildPlan() (sources.Resolved, error) {
+	if r.resolved != nil && r.resolved.Image.Build != nil {
+		return *r.resolved, nil
+	}
 	res, err := r.m.resolver.Resolve(r.ctx, r.m.config(), r.spec)
 	if err != nil {
 		return sources.Resolved{}, fmt.Errorf("resolve: %w", err)

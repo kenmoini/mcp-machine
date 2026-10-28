@@ -203,14 +203,11 @@ func (m *Manager) Remove(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
+	// Once queued the removal completes even if ctx ends: the runner
+	// forgets itself (see forget), so the name never points at a dead runner.
 	if err := r.send(ctx, evRemove); err != nil {
 		return err
 	}
-	m.mu.Lock()
-	if m.runners[name] == r {
-		delete(m.runners, name)
-	}
-	m.mu.Unlock()
 	select {
 	case <-r.done:
 		return nil
@@ -220,9 +217,28 @@ func (m *Manager) Remove(ctx context.Context, name string) error {
 }
 
 // Rebuild force-rebuilds a build-type server's image and restarts it on a
-// fresh container. Other server types return an error.
+// fresh container. Other server types return an error without disturbing
+// the server.
 func (m *Manager) Rebuild(ctx context.Context, name string) error {
-	return m.command(ctx, name, evRebuild)
+	r, err := m.runner(name)
+	if err != nil {
+		return err
+	}
+	if r.spec.Type != "build" {
+		return fmt.Errorf("manager: server %q is of type %q; only build servers can be rebuilt", name, r.spec.Type)
+	}
+	return r.send(ctx, evRebuild)
+}
+
+// forget drops a removed runner and its registry entry in one step, so a
+// runner Apply creates for the same name never has its entry deleted.
+func (m *Manager) forget(r *runner) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.runners[r.name] == r {
+		delete(m.runners, r.name)
+	}
+	m.reg.Delete(r.name)
 }
 
 // Resync re-reads the backend's lists into the server's facade.
