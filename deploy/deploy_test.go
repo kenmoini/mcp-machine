@@ -1,0 +1,100 @@
+package deploy_test
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+func readRepoFile(t *testing.T, rel string) string {
+	t.Helper()
+	b, err := os.ReadFile("../" + rel)
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	return string(b)
+}
+
+func TestComposeMountsSocketAndData(t *testing.T) {
+	var doc struct {
+		Services map[string]struct {
+			Volumes []string `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "compose.yaml")), &doc); err != nil {
+		t.Fatalf("parse compose.yaml: %v", err)
+	}
+	svc, ok := doc.Services["mcp-machine"]
+	if !ok {
+		t.Fatal(`compose.yaml has no service "mcp-machine"`)
+	}
+	var socket, data bool
+	for _, v := range svc.Volumes {
+		if v == "/run/podman/podman.sock:/run/podman/podman.sock" {
+			socket = true
+		}
+		if strings.HasSuffix(v, ":/data") {
+			data = true
+		}
+	}
+	if !socket {
+		t.Errorf("volumes %v missing the podman socket mount", svc.Volumes)
+	}
+	if !data {
+		t.Errorf("volumes %v missing a :/data mount", svc.Volumes)
+	}
+}
+
+func TestQuadletUnits(t *testing.T) {
+	c := readRepoFile(t, "deploy/quadlet/mcp-machine.container")
+	for _, want := range []string{
+		"[Container]",
+		"Image=ghcr.io/kenmoini/mcp-machine",
+		"Network=mcp-machine.network",
+		"Volume=/run/podman/podman.sock",
+	} {
+		if !strings.Contains(c, want) {
+			t.Errorf(".container missing %q", want)
+		}
+	}
+	n := readRepoFile(t, "deploy/quadlet/mcp-machine.network")
+	if !strings.Contains(n, "NetworkName=mcp-machine") {
+		t.Errorf(".network missing NetworkName=mcp-machine")
+	}
+}
+
+func TestContainerfileStages(t *testing.T) {
+	cf := readRepoFile(t, "Containerfile")
+	var froms []string
+	for _, l := range strings.Split(cf, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "FROM ") {
+			froms = append(froms, l)
+		}
+	}
+	if len(froms) < 2 {
+		t.Fatalf("want at least 2 FROM lines, got %v", froms)
+	}
+	if !strings.Contains(froms[0], "ubi9/go-toolset:1.26") {
+		t.Errorf("first FROM = %q", froms[0])
+	}
+	if !strings.Contains(froms[len(froms)-1], "ubi9/ubi-minimal:9.8") {
+		t.Errorf("last FROM = %q", froms[len(froms)-1])
+	}
+	if !strings.Contains(cf, `CMD ["serve","-c","/data/config.yaml"]`) {
+		t.Errorf("Containerfile missing the default CMD")
+	}
+}
+
+func TestContainerignoreExcludesScratch(t *testing.T) {
+	lines := map[string]bool{}
+	for _, l := range strings.Split(readRepoFile(t, ".containerignore"), "\n") {
+		lines[strings.TrimSpace(l)] = true
+	}
+	for _, want := range []string{".gocache/", ".superpowers/", "bin/"} {
+		if !lines[want] {
+			t.Errorf(".containerignore missing %q", want)
+		}
+	}
+}

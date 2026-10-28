@@ -1,0 +1,22 @@
+# Run MCP Machine with `podman compose up -d` (or `make compose-up`).
+#
+# ./data must exist and contain config.yaml (start from config.example.yaml).
+# The Podman API socket must be active on the host:
+#   sudo systemctl enable --now podman.socket
+services:
+  mcp-machine:
+    image: ghcr.io/kenmoini/mcp-machine:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - /run/podman/podman.sock:/run/podman/podman.sock
+      - ./data:/data
+    security_opt:
+      - label=disable
+    restart: unless-stopped
+    # Secrets are referenced from config.yaml as ${VAR} and resolved from this
+    # container's environment. Uncomment and set what your config uses.
+    # environment:
+    #   GHCR_USER: ${GHCR_USER}
+    #   GHCR_TOKEN: ${GHCR_TOKEN}
+    #   GITHUB_TOKEN: ${GITHUB_TOKEN}

@@ -1,0 +1,32 @@
+# Quadlet unit for MCP Machine.
+#
+# Rootful (default): install to /etc/containers/systemd/ (sudo make quadlet-install)
+# and make sure the Podman socket is active: systemctl enable --now podman.socket
+#
+# Rootless: install to ~/.config/containers/systemd/, change the socket Volume
+# below to  Volume=%t/podman/podman.sock:/run/podman/podman.sock  and run
+# systemctl --user enable --now podman.socket
+#
+# /srv/mcp-machine must exist on the host and contain config.yaml.
+# Secrets referenced as ${VAR} in config.yaml can be supplied with
+# EnvironmentFile=/etc/mcp-machine.env or Environment=NAME=value lines.
+[Unit]
+Description=MCP Machine
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/kenmoini/mcp-machine:latest
+ContainerName=mcp-machine
+PublishPort=8080:8080
+Volume=/run/podman/podman.sock:/run/podman/podman.sock
+Volume=/srv/mcp-machine:/data
+Network=mcp-machine.network
+SecurityLabelDisable=true
+AutoUpdate=registry
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target default.target

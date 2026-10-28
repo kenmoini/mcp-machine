@@ -3,11 +3,19 @@ ENGINE ?= podman
 IMAGE  ?= ghcr.io/kenmoini/mcp-machine
 TAG    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+DATE   ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Where `make quadlet-install` puts the units. Rootful by default; for rootless:
+#   make quadlet-install QUADLET_DIR=$HOME/.config/containers/systemd SYSTEMCTL="systemctl --user"
+QUADLET_DIR ?= /etc/containers/systemd
+SYSTEMCTL   ?= systemctl
+
 BUILDINFO = github.com/kenmoini/mcp-machine/internal/buildinfo
 LDFLAGS = -s -w \
 	-X $(BUILDINFO).Version=$(TAG) \
-	-X $(BUILDINFO).Commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo none) \
-	-X $(BUILDINFO).Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+	-X $(BUILDINFO).Commit=$(COMMIT) \
+	-X $(BUILDINFO).Date=$(DATE)
 
 HTMX_URL    = https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js
 HTMX_FILE   = internal/web/static/htmx.min.js
@@ -45,7 +53,9 @@ validate: build
 	./bin/mcp-machine validate
 
 image:
-	$(ENGINE) build -t $(IMAGE):$(TAG) -f Containerfile .
+	$(ENGINE) build \
+		--build-arg VERSION=$(TAG) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) \
+		-t $(IMAGE):$(TAG) -f Containerfile .
 
 push: image
 	$(ENGINE) push $(IMAGE):$(TAG)
@@ -57,9 +67,9 @@ compose-down:
 	$(ENGINE) compose down
 
 quadlet-install:
-	mkdir -p $(HOME)/.config/containers/systemd
-	cp deploy/quadlet/*.container $(HOME)/.config/containers/systemd/
-	systemctl --user daemon-reload
+	mkdir -p $(QUADLET_DIR)
+	cp deploy/quadlet/*.container deploy/quadlet/*.network $(QUADLET_DIR)/
+	$(SYSTEMCTL) daemon-reload
 
 htmx-vendor:
 	mkdir -p $(dir $(HTMX_FILE))
