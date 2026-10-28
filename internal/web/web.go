@@ -47,6 +47,10 @@ type ConfigView interface {
 	LastError() error
 	// Reload re-reads the configuration file now.
 	Reload() error
+	// Raw re-reads the configuration file with ${VAR} placeholders left
+	// unexpanded. The editing forms read and validate against it; Current
+	// holds expanded secrets and must never be written back to the file.
+	Raw() (*config.Config, error)
 }
 
 // ConfigWriter edits the configuration file (used by the forms).
@@ -96,7 +100,10 @@ func New(d Deps) http.Handler {
 		return template.Must(template.New("layout.html").Funcs(funcs).
 			ParseFS(assets, "templates/layout.html", "templates/partials/*.html"))
 	}
-	for _, page := range []string{"index.html", "server.html", "config.html"} {
+	for _, page := range []string{
+		"index.html", "server.html", "config.html",
+		"form_pick.html", "form_remote.html", "form_command.html", "form_build.html", "import.html",
+	} {
 		u.pages[page] = template.Must(base().ParseFS(assets, "templates/"+page))
 	}
 	for _, p := range fragments {
@@ -113,6 +120,14 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /config", u.configPage)
 	mux.HandleFunc("POST /config/reload", u.reload)
 	mux.HandleFunc("GET /api/servers", u.apiServers)
+	// Literal segments outrank {name}, so these never reach serverPage.
+	mux.HandleFunc("GET /servers/new", u.newForm)
+	mux.HandleFunc("POST /servers/new", u.createServer)
+	mux.HandleFunc("GET /servers/import", u.importForm)
+	mux.HandleFunc("POST /servers/import", u.importServers)
+	mux.HandleFunc("GET /servers/{name}/edit", u.editForm)
+	mux.HandleFunc("POST /servers/{name}/edit", u.updateServer)
+	mux.HandleFunc("POST /servers/{name}/delete", u.deleteServer)
 	mux.Handle("GET /static/{file...}", staticHandler())
 	return u.sameOrigin(mux)
 }
@@ -162,6 +177,7 @@ type layoutData struct {
 	Active  string
 	Flash   string
 	Version string
+	CanEdit bool
 	Data    any
 }
 
@@ -182,7 +198,7 @@ func (u *ui) render(w http.ResponseWriter, status int, tmpl *template.Template, 
 // page renders a full page inside the layout.
 func (u *ui) page(w http.ResponseWriter, status int, file, title, active string, data any) {
 	u.render(w, status, u.pages[file], "layout.html",
-		layoutData{Title: title, Active: active, Version: u.Version, Data: data})
+		layoutData{Title: title, Active: active, Version: u.Version, CanEdit: u.Writer != nil, Data: data})
 }
 
 // fragment renders partial name with data: bare for htmx requests, wrapped in
@@ -193,7 +209,7 @@ func (u *ui) fragment(w http.ResponseWriter, r *http.Request, name, title string
 		return
 	}
 	u.render(w, http.StatusOK, u.frags[name], "layout.html",
-		layoutData{Title: title, Version: u.Version, Data: data})
+		layoutData{Title: title, Version: u.Version, CanEdit: u.Writer != nil, Data: data})
 }
 
 // known returns the registry status for the request's {name}, or writes a 404.

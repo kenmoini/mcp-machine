@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+	"os"
 	"sync"
 
 	"github.com/kenmoini/mcp-machine/internal/config"
@@ -18,6 +20,7 @@ type configState struct {
 	reloadErrs uint64
 	applied    bool // the manager has applied a config at least once
 	watcher    *config.Watcher
+	path       string // the config file, re-read by Raw
 }
 
 // Current returns the configuration most recently loaded.
@@ -38,6 +41,17 @@ func (s *configState) LastError() error {
 // Reload re-reads the config file now, through the watcher's own path, so the
 // outcome is recorded and applied exactly as a file change would be.
 func (s *configState) Reload() error { return s.watcher.Reload() }
+
+// Raw re-reads the config file with every ${VAR} left as written, so the
+// result still carries the placeholders. It is the source for editing forms:
+// Current holds secrets already expanded and must never be written back.
+func (s *configState) Raw() (*config.Config, error) {
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return nil, fmt.Errorf("config: read %s: %w", s.path, err)
+	}
+	return config.Parse(data, func(name string) (string, bool) { return "${" + name + "}", true })
+}
 
 // loaded records a successfully reloaded config.
 func (s *configState) loaded(cfg *config.Config) {

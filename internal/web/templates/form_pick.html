@@ -1,0 +1,9 @@
+{{define "content"}}
+<h1>Add a server</h1>
+<div class="picker">
+  <a class="card" href="/servers/new?type=remote"><h2>Remote</h2><p class="muted">An MCP server that is already running elsewhere, reached over HTTP or SSE.</p></a>
+  <a class="card" href="/servers/new?type=command"><h2>Command</h2><p class="muted">A command such as npx or uvx, run in a container, or a docker run line.</p></a>
+  <a class="card" href="/servers/new?type=build"><h2>Build</h2><p class="muted">A server built from a git repository with a Containerfile.</p></a>
+</div>
+<p class="muted">Already have a client config or a docker run command? <a href="/servers/import">Import it</a>.</p>
+{{end}}

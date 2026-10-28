@@ -11,6 +11,9 @@
     {{- if .CanRebuild}}
     <button hx-post="/servers/{{.Name}}/actions/rebuild" hx-target="{{$t}}" hx-swap="innerHTML">Rebuild</button>
     {{- end}}
+    {{- if $.CanEdit}}
+    <a class="button" href="/servers/{{.Name}}/edit">Edit</a>
+    {{- end}}
     <button class="danger" hx-post="/servers/{{.Name}}/actions/remove" hx-target="{{$t}}" hx-swap="innerHTML" hx-confirm="Remove {{.Name}}?">Remove</button>
   </div>
 </div>

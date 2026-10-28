@@ -1,0 +1,28 @@
+<fieldset>
+  <legend>Environment</legend>
+  <div class="field">
+    <label for="f-env">Environment variables</label>
+    <textarea id="f-env" name="env" rows="3" spellcheck="false" placeholder="KEY=value">{{.V "env"}}</textarea>
+    <small class="muted">One KEY=VALUE per line. Use ${NAME} to read a value from the environment of mcp-machine.</small>
+  </div>
+</fieldset>
+<details{{if or (.V "container.image") (.V "container.volumes") (.V "container.env")}} open{{end}}>
+  <summary>Container overrides</summary>
+  <div class="field">
+    <label for="f-container-image">Image</label>
+    <input id="f-container-image" name="container.image" value="{{.V "container.image"}}" placeholder="docker.io/library/node:22">
+  </div>
+  <div class="field">
+    <label for="f-container-volumes">Volumes</label>
+    <textarea id="f-container-volumes" name="container.volumes" rows="2" spellcheck="false" placeholder="/host/path:/container/path">{{.V "container.volumes"}}</textarea>
+    <small class="muted">One volume per line.</small>
+  </div>
+  <div class="field">
+    <label for="f-container-env">Container environment</label>
+    <textarea id="f-container-env" name="container.env" rows="2" spellcheck="false" placeholder="KEY=value">{{.V "container.env"}}</textarea>
+  </div>
+</details>
+<div class="buttons">
+  <button type="submit" class="primary">{{if .Editing}}Save{{else}}Add server{{end}}</button>
+  <a href="{{if .Editing}}/servers/{{.Name}}{{else}}/{{end}}">Cancel</a>
+</div>

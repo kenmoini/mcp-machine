@@ -79,6 +79,8 @@ func (f *fakeManager) Logs(_ context.Context, _ string, tail int) ([]runtime.Log
 
 type fakeConfig struct {
 	cfg      *config.Config
+	raw      *config.Config // what Raw returns; cfg when nil
+	rawErr   error
 	lastErr  error
 	reloaded bool
 }
@@ -86,12 +88,22 @@ type fakeConfig struct {
 func (c *fakeConfig) Current() *config.Config { return c.cfg }
 func (c *fakeConfig) LastError() error        { return c.lastErr }
 func (c *fakeConfig) Reload() error           { c.reloaded = true; return nil }
+func (c *fakeConfig) Raw() (*config.Config, error) {
+	if c.rawErr != nil {
+		return nil, c.rawErr
+	}
+	if c.raw != nil {
+		return c.raw, nil
+	}
+	return c.cfg, nil
+}
 
 type env struct {
 	h   http.Handler
 	mgr *fakeManager
 	cfg *fakeConfig
 	reg *store.Registry
+	wr  *fakeWriter
 }
 
 func newEnv(t *testing.T) *env {
@@ -126,22 +138,23 @@ func newEnv(t *testing.T) *env {
 	cfg := &fakeConfig{cfg: &config.Config{
 		Listen:    ":8080",
 		PublicURL: "http://mcp.lan:8080",
-		Podman:    config.PodmanConfig{Socket: "unix:///run/podman.sock", Network: "mcp"},
+		Podman:    config.PodmanConfig{Socket: "unix:///run/podman.sock", Network: "mcp", StopTimeout: 10 * time.Second},
 		Registries: []config.Registry{
 			{Registry: "ghcr.io", Username: "ken", Password: "s3cret"},
 		},
 		Runtimes: map[string]string{"npx": "node:22"},
 		Servers: []config.ServerSpec{
 			{Name: "alpha", Type: "command", Command: &config.CommandSpec{Command: "npx"}},
-			{Name: "beta", Type: "remote", Remote: &config.RemoteSpec{URL: "https://x.example/mcp", Headers: map[string]string{"Authorization": "Bearer hdr-secret"}}},
+			{Name: "beta", Type: "remote", Remote: &config.RemoteSpec{URL: "https://x.example/mcp", Transport: "auto", Headers: map[string]string{"Authorization": "Bearer hdr-secret"}}},
 		},
 	}}
+	wr := &fakeWriter{}
 	h := web.New(web.Deps{
-		Manager: mgr, Registry: reg, Config: cfg,
+		Manager: mgr, Registry: reg, Config: cfg, Writer: wr,
 		PublicURL: "http://mcp.lan:8080", Version: "test",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	return &env{h: h, mgr: mgr, cfg: cfg, reg: reg}
+	return &env{h: h, mgr: mgr, cfg: cfg, reg: reg, wr: wr}
 }
 
 func (e *env) do(method, target string, hdr ...string) *httptest.ResponseRecorder {

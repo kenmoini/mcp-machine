@@ -130,3 +130,29 @@ func TestNewManagerAppliedDespiteServerErrors(t *testing.T) {
 		t.Errorf("ListContainers called %d times, want 1 (no retry)", n)
 	}
 }
+
+func TestConfigStateRawKeepsPlaceholders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := "servers:\n  - name: x\n    type: remote\n    remote:\n      url: https://x.example/mcp\n      headers:\n        Authorization: Bearer ${NOT_SET_ANYWHERE}\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &configState{path: path}
+	raw, err := s.Raw()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := raw.Servers[0].Remote.Headers["Authorization"]; got != "Bearer ${NOT_SET_ANYWHERE}" {
+		t.Errorf("header = %q", got)
+	}
+	if raw.Servers[0].Remote.Transport != "auto" {
+		t.Errorf("defaults not applied: %+v", raw.Servers[0].Remote)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Raw(); err == nil {
+		t.Error("missing file: want error")
+	}
+}

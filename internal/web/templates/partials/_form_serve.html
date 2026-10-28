@@ -1,0 +1,28 @@
+<fieldset>
+  <legend>Serve</legend>
+  <p class="muted">How the container exposes MCP. Leave empty for the default (stdio).</p>
+  <div class="field">
+    <label for="f-serve-mode">Mode</label>
+    <select id="f-serve-mode" name="serve.mode">
+      <option value=""{{if eq (.V "serve.mode") ""}} selected{{end}}>default (stdio)</option>
+      <option value="stdio"{{if eq (.V "serve.mode") "stdio"}} selected{{end}}>stdio</option>
+      <option value="http"{{if eq (.V "serve.mode") "http"}} selected{{end}}>http</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="f-serve-port">Port</label>
+    <input id="f-serve-port" name="serve.port" inputmode="numeric" value="{{.V "serve.port"}}" placeholder="3000">
+  </div>
+  <div class="field">
+    <label for="f-serve-path">Path</label>
+    <input id="f-serve-path" name="serve.path" value="{{.V "serve.path"}}" placeholder="/mcp">
+  </div>
+  <div class="field">
+    <label for="f-serve-transport">Transport</label>
+    <select id="f-serve-transport" name="serve.transport">
+      <option value=""{{if eq (.V "serve.transport") ""}} selected{{end}}>default</option>
+      <option value="http"{{if eq (.V "serve.transport") "http"}} selected{{end}}>http</option>
+      <option value="sse"{{if eq (.V "serve.transport") "sse"}} selected{{end}}>sse</option>
+    </select>
+  </div>
+</fieldset>

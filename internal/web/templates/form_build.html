@@ -1,0 +1,40 @@
+{{define "content"}}
+<h1>{{if .Editing}}Edit {{.Name}}{{else}}Add a build server{{end}}</h1>
+<form method="post" action="{{.Action}}" class="form">
+{{template "_form_head.html" .}}
+<fieldset>
+  <legend>Build</legend>
+  <div class="field">
+    <label for="f-build-repo">Repository</label>
+    <input id="f-build-repo" name="build.repo" value="{{.V "build.repo"}}" required placeholder="https://github.com/acme/server.git">
+  </div>
+  <div class="field">
+    <label for="f-build-ref">Ref</label>
+    <input id="f-build-ref" name="build.ref" value="{{.V "build.ref"}}" placeholder="main">
+  </div>
+  <div class="field">
+    <label for="f-build-subdir">Subdirectory</label>
+    <input id="f-build-subdir" name="build.subdir" value="{{.V "build.subdir"}}">
+  </div>
+  <div class="field">
+    <label for="f-build-containerfile">Containerfile</label>
+    <input id="f-build-containerfile" name="build.containerfile" value="{{.V "build.containerfile"}}" placeholder="Containerfile">
+  </div>
+  <div class="field">
+    <label for="f-build-args">Build arguments</label>
+    <textarea id="f-build-args" name="build.args" rows="2" spellcheck="false" placeholder="KEY=value">{{.V "build.args"}}</textarea>
+  </div>
+  <div class="field">
+    <label for="f-build-token">Git token</label>
+    <input id="f-build-token" name="build.auth.token" value="{{.V "build.auth.token"}}" placeholder="${GIT_TOKEN}" autocomplete="off">
+  </div>
+  <div class="field">
+    <label for="f-build-ssh">SSH key file</label>
+    <input id="f-build-ssh" name="build.auth.ssh_key_file" value="{{.V "build.auth.ssh_key_file"}}" placeholder="/run/secrets/id_ed25519">
+  </div>
+</fieldset>
+{{template "_form_serve.html" .}}
+{{template "_form_tail.html" .}}
+</form>
+{{template "_form_delete.html" .}}
+{{end}}

@@ -1,0 +1,11 @@
+{{if .Errors}}<div class="err banner" role="alert"><ul>{{range .Errors}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+<input type="hidden" name="type" value="{{.Type}}">
+<div class="field">
+  <label for="f-name">Name</label>
+  <input id="f-name" name="name" value="{{.V "name"}}" required pattern="[a-z0-9]([\-a-z0-9]{0,61}[a-z0-9])?"{{if .Editing}} readonly{{end}} placeholder="my-server">
+  <small class="muted">Lowercase letters, digits and dashes; used in the server's URL.{{if .Editing}} A server's name cannot be changed.{{end}}</small>
+</div>
+<div class="field check">
+  <input type="hidden" name="enabled" value="0">
+  <label><input type="checkbox" name="enabled" value="1"{{if .Enabled}} checked{{end}}> Enabled</label>
+</div>

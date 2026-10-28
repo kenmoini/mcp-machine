@@ -1,0 +1,28 @@
+{{define "content"}}
+<h1>{{if .Editing}}Edit {{.Name}}{{else}}Add a remote server{{end}}</h1>
+<form method="post" action="{{.Action}}" class="form">
+{{template "_form_head.html" .}}
+<fieldset>
+  <legend>Remote</legend>
+  <div class="field">
+    <label for="f-remote-url">URL</label>
+    <input id="f-remote-url" name="remote.url" value="{{.V "remote.url"}}" required placeholder="https://example.com/mcp">
+  </div>
+  <div class="field">
+    <label for="f-remote-transport">Transport</label>
+    <select id="f-remote-transport" name="remote.transport">
+      <option value="auto"{{if or (eq (.V "remote.transport") "auto") (eq (.V "remote.transport") "")}} selected{{end}}>auto</option>
+      <option value="http"{{if eq (.V "remote.transport") "http"}} selected{{end}}>http</option>
+      <option value="sse"{{if eq (.V "remote.transport") "sse"}} selected{{end}}>sse</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="f-remote-headers">Headers</label>
+    <textarea id="f-remote-headers" name="remote.headers" rows="3" spellcheck="false" placeholder="Authorization: Bearer ${TOKEN}">{{.V "remote.headers"}}</textarea>
+    <small class="muted">One "Key: Value" per line.</small>
+  </div>
+</fieldset>
+{{template "_form_tail.html" .}}
+</form>
+{{template "_form_delete.html" .}}
+{{end}}

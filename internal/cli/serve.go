@@ -79,7 +79,7 @@ func newManager(ctx context.Context, path string, cfg *config.Config, engine run
 		Logger:      logger,
 		Version:     buildinfo.Version,
 	})
-	state := &configState{current: cfg}
+	state := &configState{current: cfg, path: path}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	watcher, err := config.NewWatcher(path,
@@ -269,6 +269,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts
 		Manager:   deps.mgr,
 		Registry:  deps.reg,
 		Config:    deps.state,
+		Writer:    config.Writer{Path: *path},
 		PublicURL: cfg.PublicURL,
 		Version:   buildinfo.Version,
 		Logger:    logger,

@@ -1,0 +1,30 @@
+{{define "content"}}
+<h1>Import servers</h1>
+<form method="post" action="/servers/import" class="form">
+  {{if .Errors}}<div class="err banner" role="alert"><ul>{{range .Errors}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+  <div class="field">
+    <label for="f-text">Client config or docker run command</label>
+    <textarea id="f-text" name="text" rows="10" spellcheck="false" placeholder='{"mcpServers": {...}}  or  docker run -i --rm ghcr.io/acme/server'>{{.Text}}</textarea>
+    <small class="muted">Paste the "mcpServers" JSON of Claude Desktop, Claude Code or Cursor, or a single docker/podman run line.</small>
+  </div>
+  <div class="buttons"><button type="submit" class="primary">Preview</button></div>
+</form>
+{{if .Entries}}
+<h2>Preview</h2>
+<table>
+  <thead><tr><th>Name</th><th>Type</th><th>Summary</th></tr></thead>
+  <tbody>
+  {{range .Entries}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td class="mono">{{.Summary}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{if .Confirmable}}
+<form method="post" action="/servers/import" class="form">
+  <input type="hidden" name="confirm" value="1">
+  {{range .Entries}}{{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">
+  {{end}}{{end}}
+  <div class="buttons"><button type="submit" class="primary">Add {{len .Entries}} server{{if ne (len .Entries) 1}}s{{end}}</button></div>
+</form>
+{{end}}
+{{end}}
+{{end}}

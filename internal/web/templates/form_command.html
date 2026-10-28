@@ -1,0 +1,30 @@
+{{define "content"}}
+<h1>{{if .Editing}}Edit {{.Name}}{{else}}Add a command server{{end}}</h1>
+<form method="post" action="{{.Action}}" class="form">
+{{template "_form_head.html" .}}
+<fieldset>
+  <legend>Command</legend>
+  <p class="muted">Set either a command (run in a runtime image) or a full docker run line, not both.</p>
+  <div class="field">
+    <label for="f-command-command">Command</label>
+    <input id="f-command-command" name="command.command" value="{{.V "command.command"}}" placeholder="npx">
+  </div>
+  <div class="field">
+    <label for="f-command-args">Arguments</label>
+    <textarea id="f-command-args" name="command.args" rows="3" spellcheck="false" placeholder="-y&#10;@modelcontextprotocol/server-filesystem">{{.V "command.args"}}</textarea>
+    <small class="muted">One argument per line.</small>
+  </div>
+  <div class="field">
+    <label for="f-command-env">Command environment</label>
+    <textarea id="f-command-env" name="command.env" rows="2" spellcheck="false" placeholder="KEY=value">{{.V "command.env"}}</textarea>
+  </div>
+  <div class="field">
+    <label for="f-command-run">Or: docker run line</label>
+    <input id="f-command-run" name="command.run" class="mono" value="{{.V "command.run"}}" placeholder="docker run -i --rm ghcr.io/acme/server">
+  </div>
+</fieldset>
+{{template "_form_serve.html" .}}
+{{template "_form_tail.html" .}}
+</form>
+{{template "_form_delete.html" .}}
+{{end}}

@@ -23,6 +23,7 @@ type serverData struct {
 	Tools   toolsView
 	Logs    logsView
 	Connect connectView
+	CanEdit bool
 }
 
 func (u *ui) serverPage(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +37,7 @@ func (u *ui) serverPage(w http.ResponseWriter, r *http.Request) {
 		Tools:   u.toolsView(st.Name),
 		Logs:    u.logsView(r, st.Name, defaultTail),
 		Connect: u.connectView(r, st.Name),
+		CanEdit: u.Writer != nil,
 	}
 	if spec, ok := u.specFor(st.Name); ok {
 		sv := summarize(spec, u.Config.Current())

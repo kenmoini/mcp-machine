@@ -1,0 +1,7 @@
+{{if .Editing}}
+<form method="post" action="/servers/{{.Name}}/delete" class="danger-zone" hx-confirm="Delete {{.Name}}?">
+  <h2>Delete</h2>
+  <p class="muted">Removes {{.Name}} from the configuration file. Its container is stopped and removed.</p>
+  <button type="submit" class="danger">Delete {{.Name}}</button>
+</form>
+{{end}}

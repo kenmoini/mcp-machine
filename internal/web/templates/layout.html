@@ -12,6 +12,10 @@
 <nav class="nav">
   <a class="brand" href="/">MCP Machine</a>
   <a href="/"{{if eq .Active "dashboard"}} aria-current="page"{{end}}>Dashboard</a>
+  {{- if .CanEdit}}
+  <a href="/servers/new"{{if eq .Active "new"}} aria-current="page"{{end}}>Add server</a>
+  <a href="/servers/import"{{if eq .Active "import"}} aria-current="page"{{end}}>Import</a>
+  {{- end}}
   <a href="/config"{{if eq .Active "config"}} aria-current="page"{{end}}>Config</a>
 </nav>
 <div id="flash" class="flash" role="status" aria-live="polite">{{.Flash}}</div>
