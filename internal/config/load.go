@@ -42,12 +42,21 @@ func Parse(data []byte, lookup func(string) (string, bool)) (*Config, error) {
 	return c, nil
 }
 
-// Load reads and parses the config file at path. The environment variable
-// MCP_MACHINE_PODMAN_SOCKET, when set, overrides podman.socket.
+// errEmptyFile reports a config file with no content.
+var errEmptyFile = errors.New("config: file is empty")
+
+// Load reads and parses the config file at path. An empty or whitespace-only
+// file is an error ("config: file is empty") so a half-written file is never
+// mistaken for an all-defaults config. The file is read exactly once. The
+// environment variable MCP_MACHINE_PODMAN_SOCKET, when set, overrides
+// podman.socket.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, errEmptyFile
 	}
 	c, err := Parse(data, os.LookupEnv)
 	if err != nil {

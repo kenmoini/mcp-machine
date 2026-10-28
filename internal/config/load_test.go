@@ -281,3 +281,21 @@ func TestRuntimeImage(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadRejectsEmptyFile(t *testing.T) {
+	for name, content := range map[string]string{
+		"zero bytes": "",
+		"whitespace": " \n\t\n  ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.Load(path)
+			if err == nil || err.Error() != "config: file is empty" {
+				t.Errorf("Load error = %v, want %q", err, "config: file is empty")
+			}
+		})
+	}
+}

@@ -1,11 +1,9 @@
 package config
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -16,9 +14,6 @@ import (
 // event before the config is reloaded. It is a variable (not a constant) so
 // in-package tests can adjust it; the default is used otherwise.
 var debounceInterval = 250 * time.Millisecond
-
-// errEmptyFile reports a config file with no content.
-var errEmptyFile = errors.New("config: file is empty")
 
 // Watcher reloads a config file when it changes on disk.
 type Watcher struct {
@@ -67,7 +62,7 @@ func (w *Watcher) Close() error { return w.fsw.Close() }
 
 // Reload loads and validates the config file, then calls onChange on success
 // or onError on failure, and returns the error. An empty or whitespace-only
-// file is an error ("config: file is empty"). Reload runs on the caller's
+// file is an error (see Load). Reload runs on the caller's
 // goroutine.
 func (w *Watcher) Reload() error {
 	cfg, err := w.load()
@@ -80,13 +75,6 @@ func (w *Watcher) Reload() error {
 }
 
 func (w *Watcher) load() (*Config, error) {
-	data, err := os.ReadFile(w.path)
-	if err != nil {
-		return nil, fmt.Errorf("config: read %s: %w", w.path, err)
-	}
-	if len(bytes.TrimSpace(data)) == 0 {
-		return nil, errEmptyFile
-	}
 	cfg, err := Load(w.path)
 	if err != nil {
 		return nil, err
