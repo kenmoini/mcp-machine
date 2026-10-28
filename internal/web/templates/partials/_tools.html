@@ -2,24 +2,24 @@
 {{if not .HasFacade}}
   <p class="empty">No backend connected.</p>
 {{else}}
-  <h3>Tools ({{len .Tools}})</h3>
-  {{if .Tools}}<table><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody>
-  {{range .Tools}}<tr><td class="mono">{{.Name}}</td><td>{{.Description}}</td></tr>
+  <h3>Tools ({{len .Snapshot.Tools}})</h3>
+  {{if .Snapshot.Tools}}<table><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody>
+  {{range .Snapshot.Tools}}<tr><td class="mono">{{.Name}}</td><td>{{.Description}}</td></tr>
   {{end}}</tbody></table>{{else}}<p class="empty">None.</p>{{end}}
 
-  <h3>Resources ({{len .Resources}})</h3>
-  {{if .Resources}}<table><thead><tr><th>Name</th><th>URI</th><th>Type</th></tr></thead><tbody>
-  {{range .Resources}}<tr><td>{{.Name}}</td><td class="mono">{{.URI}}</td><td>{{.MIMEType}}</td></tr>
+  <h3>Resources ({{len .Snapshot.Resources}})</h3>
+  {{if .Snapshot.Resources}}<table><thead><tr><th>Name</th><th>URI</th><th>Type</th></tr></thead><tbody>
+  {{range .Snapshot.Resources}}<tr><td>{{.Name}}</td><td class="mono">{{.URI}}</td><td>{{.MIMEType}}</td></tr>
   {{end}}</tbody></table>{{else}}<p class="empty">None.</p>{{end}}
 
-  <h3>Resource templates ({{len .ResourceTemplates}})</h3>
-  {{if .ResourceTemplates}}<table><thead><tr><th>Name</th><th>URI template</th><th>Type</th></tr></thead><tbody>
-  {{range .ResourceTemplates}}<tr><td>{{.Name}}</td><td class="mono">{{.URITemplate}}</td><td>{{.MIMEType}}</td></tr>
+  <h3>Resource templates ({{len .Snapshot.ResourceTemplates}})</h3>
+  {{if .Snapshot.ResourceTemplates}}<table><thead><tr><th>Name</th><th>URI template</th><th>Type</th></tr></thead><tbody>
+  {{range .Snapshot.ResourceTemplates}}<tr><td>{{.Name}}</td><td class="mono">{{.URITemplate}}</td><td>{{.MIMEType}}</td></tr>
   {{end}}</tbody></table>{{else}}<p class="empty">None.</p>{{end}}
 
-  <h3>Prompts ({{len .Prompts}})</h3>
-  {{if .Prompts}}<table><thead><tr><th>Name</th><th>Description</th><th>Arguments</th></tr></thead><tbody>
-  {{range .Prompts}}<tr><td class="mono">{{.Name}}</td><td>{{.Description}}</td><td>{{range $i, $a := .Arguments}}{{if $i}}, {{end}}{{$a.Name}}{{if $a.Required}}*{{end}}{{end}}</td></tr>
+  <h3>Prompts ({{len .Snapshot.Prompts}})</h3>
+  {{if .Snapshot.Prompts}}<table><thead><tr><th>Name</th><th>Description</th><th>Arguments</th></tr></thead><tbody>
+  {{range .Snapshot.Prompts}}<tr><td class="mono">{{.Name}}</td><td>{{.Description}}</td><td>{{range $i, $a := .Arguments}}{{if $i}}, {{end}}{{$a.Name}}{{if $a.Required}}*{{end}}{{end}}</td></tr>
   {{end}}</tbody></table>{{else}}<p class="empty">None.</p>{{end}}
 {{end}}
 </div>

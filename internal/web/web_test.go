@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -423,4 +427,59 @@ func TestActionFromDetailPageRendersFlash(t *testing.T) {
 		t.Fatalf("status %d", rec.Code)
 	}
 	mustContain(t, rec.Body.String(), "stop failed: nope")
+}
+
+func TestPollingGoneServerDoesNotSwapErrorBody(t *testing.T) {
+	e := newEnv(t)
+	hx := []string{"HX-Request", "true"}
+
+	rec := e.do("GET", "/servers/nope/status?view=row", hx...)
+	if rec.Code != 200 || rec.Body.Len() != 0 || rec.Header().Get("HX-Reswap") != "outerHTML" {
+		t.Errorf("row: status %d body %q reswap %q", rec.Code, rec.Body, rec.Header().Get("HX-Reswap"))
+	}
+	for _, p := range []string{"/servers/nope/status", "/servers/nope/tools", "/servers/nope/logs"} {
+		rec := e.do("GET", p, hx...)
+		if rec.Code != 200 || rec.Body.Len() != 0 || rec.Header().Get("HX-Refresh") != "true" {
+			t.Errorf("%s: status %d body %q refresh %q", p, rec.Code, rec.Body, rec.Header().Get("HX-Refresh"))
+		}
+	}
+	if rec := e.do("GET", "/servers/nope/status?view=row"); rec.Code != 404 {
+		t.Errorf("non-htmx row: status %d", rec.Code)
+	}
+}
+
+func TestReloadWithoutConfigIs503(t *testing.T) {
+	h := web.New(web.Deps{Registry: store.NewRegistry()})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/config/reload", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status %d", rec.Code)
+	}
+}
+
+// The web package renders what the proxy exposes; it must not depend on the
+// MCP SDK directly.
+func TestNoSDKImportInWeb(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("glob: %v (%d files)", err, len(files))
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), f, src, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, imp := range parsed.Imports {
+			if strings.Contains(imp.Path.Value, "go-sdk/mcp") {
+				t.Errorf("%s imports %s", f, imp.Path.Value)
+			}
+		}
+	}
 }

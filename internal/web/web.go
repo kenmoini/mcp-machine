@@ -205,6 +205,28 @@ func (u *ui) known(w http.ResponseWriter, r *http.Request) (store.Status, bool) 
 	return st, ok
 }
 
+// knownPoll is known for the polled partials. When the server has gone away
+// mid-page, an htmx poll must not swap an error body over its block: it gets
+// an empty 200 instead. A row (row=true) is swapped out, which removes it;
+// the detail page's blocks refresh the whole page. Other requests get a 404.
+func (u *ui) knownPoll(w http.ResponseWriter, r *http.Request, row bool) (store.Status, bool) {
+	st, ok := u.Registry.Get(r.PathValue("name"))
+	if ok {
+		return st, true
+	}
+	if r.Header.Get("HX-Request") != "true" {
+		http.NotFound(w, r)
+		return st, false
+	}
+	if row {
+		w.Header().Set("HX-Reswap", "outerHTML")
+	} else {
+		w.Header().Set("HX-Refresh", "true")
+	}
+	w.WriteHeader(http.StatusOK)
+	return st, false
+}
+
 // specFor returns the configured spec for name.
 func (u *ui) specFor(name string) (config.ServerSpec, bool) {
 	if u.Config == nil {

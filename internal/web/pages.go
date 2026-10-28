@@ -74,6 +74,10 @@ func (u *ui) configPage(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (u *ui) reload(w http.ResponseWriter, r *http.Request) {
+	if u.Config == nil {
+		http.Error(w, "configuration unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if err := u.Config.Reload(); err != nil {
 		// The watcher records the failure; the config page shows it.
 		u.Logger.Warn("reload config", "err", err)

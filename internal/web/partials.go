@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/kenmoini/mcp-machine/internal/proxy"
 )
 
 // rowView is the _server_row partial's data: the server plus any error from
@@ -16,12 +16,13 @@ type rowView struct {
 }
 
 func (u *ui) status(w http.ResponseWriter, r *http.Request) {
-	st, ok := u.known(w, r)
+	row := r.URL.Query().Get("view") == "row"
+	st, ok := u.knownPoll(w, r, row)
 	if !ok {
 		return
 	}
 	v := u.serverView(st)
-	if r.URL.Query().Get("view") == "row" {
+	if row {
 		// The dashboard polls each row through this view.
 		u.render(w, http.StatusOK, u.pages["index.html"], "_server_row.html", rowView{serverView: v})
 		return
@@ -126,7 +127,7 @@ func (u *ui) logsView(r *http.Request, name string, def int) logsView {
 }
 
 func (u *ui) logs(w http.ResponseWriter, r *http.Request) {
-	st, ok := u.known(w, r)
+	st, ok := u.knownPoll(w, r, false)
 	if !ok {
 		return
 	}
@@ -135,27 +136,22 @@ func (u *ui) logs(w http.ResponseWriter, r *http.Request) {
 
 // toolsView is the _tools partial's data: what the server's facade mirrors.
 type toolsView struct {
-	Name              string
-	HasFacade         bool
-	Tools             []*mcp.Tool
-	Resources         []*mcp.Resource
-	ResourceTemplates []*mcp.ResourceTemplate
-	Prompts           []*mcp.Prompt
+	Name      string
+	HasFacade bool
+	Snapshot  proxy.Snapshot
 }
 
 func (u *ui) toolsView(name string) toolsView {
 	v := toolsView{Name: name}
 	if f, ok := u.Manager.Facade(name); ok && f != nil {
-		snap := f.Snapshot()
 		v.HasFacade = true
-		v.Tools, v.Resources = snap.Tools, snap.Resources
-		v.ResourceTemplates, v.Prompts = snap.ResourceTemplates, snap.Prompts
+		v.Snapshot = f.Snapshot()
 	}
 	return v
 }
 
 func (u *ui) tools(w http.ResponseWriter, r *http.Request) {
-	st, ok := u.known(w, r)
+	st, ok := u.knownPoll(w, r, false)
 	if !ok {
 		return
 	}
