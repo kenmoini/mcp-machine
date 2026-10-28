@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -174,43 +175,99 @@ func (f *Facade) Resync(ctx context.Context) error {
 		return err
 	}
 
-	for _, t := range tools {
-		if t.InputSchema == nil {
-			t.InputSchema = map[string]any{"type": "object"}
-		}
-	}
+	tools = f.mirrorableTools(tools)
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	removed, changed := diff(f.snap.Tools, tools, func(t *mcp.Tool) string { return t.Name })
-	f.server.RemoveTools(removed...)
-	for _, t := range changed {
-		f.server.AddTool(t, f.forwardTool)
-	}
-	f.snap.Tools = tools
+	f.snap.Tools = apply(f, "tool", f.snap.Tools, tools, func(t *mcp.Tool) string { return t.Name },
+		f.server.RemoveTools, func(t *mcp.Tool) { f.server.AddTool(t, f.forwardTool) })
+	f.snap.Resources = apply(f, "resource", f.snap.Resources, resources, func(r *mcp.Resource) string { return r.URI },
+		f.server.RemoveResources, func(r *mcp.Resource) { f.server.AddResource(r, f.forwardResource) })
+	f.snap.ResourceTemplates = apply(f, "resource template", f.snap.ResourceTemplates, templates,
+		func(t *mcp.ResourceTemplate) string { return t.URITemplate },
+		f.server.RemoveResourceTemplates, func(t *mcp.ResourceTemplate) { f.server.AddResourceTemplate(t, f.forwardResource) })
+	f.snap.Prompts = apply(f, "prompt", f.snap.Prompts, prompts, func(p *mcp.Prompt) string { return p.Name },
+		f.server.RemovePrompts, func(p *mcp.Prompt) { f.server.AddPrompt(p, f.forwardPrompt) })
 
-	removed, changedR := diff(f.snap.Resources, resources, func(r *mcp.Resource) string { return r.URI })
-	f.server.RemoveResources(removed...)
-	for _, r := range changedR {
-		f.server.AddResource(r, f.forwardResource)
-	}
-	f.snap.Resources = resources
+	return nil
+}
 
-	removed, changedT := diff(f.snap.ResourceTemplates, templates, func(t *mcp.ResourceTemplate) string { return t.URITemplate })
-	f.server.RemoveResourceTemplates(removed...)
-	for _, t := range changedT {
-		f.server.AddResourceTemplate(t, f.forwardResource)
+// mirrorableTools normalises backend tool definitions so the SDK accepts them.
+// A missing input schema, or an object schema without "type", becomes
+// {"type":"object"}-compatible; tools whose input schema is not an object
+// schema are skipped with a warning, since the SDK would panic on them.
+func (f *Facade) mirrorableTools(tools []*mcp.Tool) []*mcp.Tool {
+	out := make([]*mcp.Tool, 0, len(tools))
+	for _, t := range tools {
+		if t == nil {
+			continue
+		}
+		switch schema := t.InputSchema.(type) {
+		case nil:
+			c := *t
+			c.InputSchema = map[string]any{"type": "object"}
+			t = &c
+		case map[string]any:
+			switch typ, has := schema["type"]; {
+			case !has:
+				m := make(map[string]any, len(schema)+1)
+				for k, v := range schema {
+					m[k] = v
+				}
+				m["type"] = "object"
+				c := *t
+				c.InputSchema = m
+				t = &c
+			case typ != "object":
+				slog.Warn("proxy: skipping tool with non-object input schema", "server", f.name, "tool", t.Name)
+				continue
+			}
+		default:
+			slog.Warn("proxy: skipping tool with non-object input schema", "server", f.name, "tool", t.Name)
+			continue
+		}
+		out = append(out, t)
 	}
-	f.snap.ResourceTemplates = templates
+	return out
+}
 
-	removed, changedP := diff(f.snap.Prompts, prompts, func(p *mcp.Prompt) string { return p.Name })
-	f.server.RemovePrompts(removed...)
-	for _, p := range changedP {
-		f.server.AddPrompt(p, f.forwardPrompt)
+// apply diffs updated against old, removes vanished entries, and adds or
+// replaces changed ones. An add that panics (the SDK panics on definitions it
+// cannot accept) is recovered, logged, and skipped; the entry is then left
+// out of the returned snapshot and any previous version is removed.
+func apply[T any](f *Facade, kind string, old, updated []T, key func(T) string, remove func(...string), add func(T)) []T {
+	removed, changed := diff(old, updated, key)
+	remove(removed...)
+	failed := map[string]bool{}
+	for _, c := range changed {
+		if err := safely(func() { add(c) }); err != nil {
+			k := key(c)
+			slog.Warn("proxy: skipping definition the server rejected", "server", f.name, "kind", kind, "key", k, "err", err)
+			failed[k] = true
+			remove(k)
+		}
 	}
-	f.snap.Prompts = prompts
+	if len(failed) == 0 {
+		return updated
+	}
+	kept := make([]T, 0, len(updated))
+	for _, u := range updated {
+		if !failed[key(u)] {
+			kept = append(kept, u)
+		}
+	}
+	return kept
+}
 
+// safely runs fn and converts a panic into an error.
+func safely(fn func()) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v", r)
+		}
+	}()
+	fn()
 	return nil
 }
 
@@ -254,20 +311,32 @@ func diff[T any](old, updated []T, key func(T) string) (removed []string, change
 	return removed, changed
 }
 
+// unmarshalableSeq makes fingerprints of unmarshalable entries unique.
+var unmarshalableSeq atomic.Uint64
+
 func fingerprint(v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return nil
+		// Never equal to any other fingerprint, so the entry counts as changed.
+		return []byte(fmt.Sprintf("unmarshalable-%d", unmarshalableSeq.Add(1)))
 	}
 	return b
 }
 
+// forwardTool relays a tool call to the backend. The client's _meta is not
+// forwarded: protocol metadata belongs to each hop. Arguments are passed as the
+// raw JSON the client sent; when there are none, an untyped nil is used so the
+// field is omitted rather than sent as null.
 func (f *Facade) forwardTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sess, err := f.session()
 	if err != nil {
 		return nil, err
 	}
-	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: req.Params.Name, Arguments: req.Params.Arguments})
+	var args any
+	if len(req.Params.Arguments) > 0 {
+		args = req.Params.Arguments
+	}
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: req.Params.Name, Arguments: args})
 	if err != nil {
 		return nil, err
 	}

@@ -1,8 +1,12 @@
 package proxy_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"sort"
 	"testing"
 
@@ -237,5 +241,276 @@ func TestFacadeUnboundReturnsUnavailable(t *testing.T) {
 	}
 	if f.Calls() != 0 {
 		t.Errorf("failed forward must not count, calls = %d", f.Calls())
+	}
+}
+
+var objectSchema = map[string]any{"type": "object"}
+
+func rawBackend(t *testing.T) *mcp.Server {
+	t.Helper()
+	return mcp.NewServer(&mcp.Implementation{Name: "raw", Version: "1"}, nil)
+}
+
+func TestFacadeForwardsRawArgumentsVerbatim(t *testing.T) {
+	backend := rawBackend(t)
+	var got json.RawMessage
+	backend.AddTool(&mcp.Tool{Name: "rec", InputSchema: objectSchema},
+		func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			got = append(json.RawMessage(nil), req.Params.Arguments...)
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+		})
+	_, c := boundFacade(t, backend)
+
+	body := json.RawMessage(`{"o":{"n":[1,2,{"x":null}]},"f":1.50,"big":12345678901234567890,"s":"a\u00e9"}`)
+	if _, err := c.CallTool(context.Background(), &mcp.CallToolParams{Name: "rec", Arguments: body}); err != nil {
+		t.Fatal(err)
+	}
+	var want, have bytes.Buffer
+	if err := json.Compact(&want, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Compact(&have, got); err != nil {
+		t.Fatalf("backend got invalid JSON %q: %v", got, err)
+	}
+	if want.String() != have.String() {
+		t.Errorf("backend arguments\n got  %s\n want %s", have.String(), want.String())
+	}
+}
+
+// The SDK client normalises absent arguments to {} on the wire, so a real
+// client never reaches the facade with nil arguments over this transport. The
+// test strips them in a facade-side middleware to exercise the handler's
+// nil-RawMessage path directly: it must not forward "arguments":null.
+func TestFacadeForwardsNoArgumentsAsAbsent(t *testing.T) {
+	backend := rawBackend(t)
+	var got json.RawMessage
+	var called bool
+	backend.AddTool(&mcp.Tool{Name: "noargs", InputSchema: objectSchema},
+		func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			called = true
+			got = append(json.RawMessage(nil), req.Params.Arguments...)
+			return &mcp.CallToolResult{}, nil
+		})
+	f, c := boundFacade(t, backend)
+
+	var facadeSawNil bool
+	f.Server().AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if r, ok := req.(*mcp.CallToolRequest); ok {
+				r.Params.Arguments = nil
+				facadeSawNil = len(r.Params.Arguments) == 0
+			}
+			return next(ctx, method, req)
+		}
+	})
+
+	if _, err := c.CallTool(context.Background(), &mcp.CallToolParams{Name: "noargs"}); err != nil {
+		t.Fatal(err)
+	}
+	if !called || !facadeSawNil {
+		t.Fatalf("called backend=%v facade nil args=%v", called, facadeSawNil)
+	}
+	// The backend SDK client turns absent arguments into {}; what matters is
+	// that the facade did not send an explicit JSON null.
+	if string(got) == "null" {
+		t.Errorf("backend received arguments null, want absent or {}")
+	}
+	var m map[string]any
+	if len(got) != 0 {
+		if err := json.Unmarshal(got, &m); err != nil || m == nil {
+			t.Errorf("backend arguments %q are not a JSON object: %v", got, err)
+		}
+	}
+}
+
+func TestFacadeKeepsIsErrorResult(t *testing.T) {
+	backend := rawBackend(t)
+	backend.AddTool(&mcp.Tool{Name: "fail", InputSchema: objectSchema},
+		func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "bad"}}}, nil
+		})
+	_, c := boundFacade(t, backend)
+	res, err := c.CallTool(context.Background(), &mcp.CallToolParams{Name: "fail"})
+	if err != nil {
+		t.Fatalf("IsError result must not become a protocol error: %v", err)
+	}
+	if !res.IsError || len(res.Content) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	if tc, ok := res.Content[0].(*mcp.TextContent); !ok || tc.Text != "bad" {
+		t.Errorf("content = %#v", res.Content[0])
+	}
+}
+
+func TestFacadeResyncReplacesAndRemoves(t *testing.T) {
+	backend := newBackend(t, nil)
+	f, c := boundFacade(t, backend)
+
+	backend.AddTool(&mcp.Tool{Name: "echo", Description: "changed", InputSchema: objectSchema},
+		func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{}, nil
+		})
+	backend.RemoveTools("add")
+	if err := f.Resync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	snap := f.Snapshot()
+	if len(snap.Tools) != 1 || snap.Tools[0].Name != "echo" || snap.Tools[0].Description != "changed" {
+		t.Fatalf("snapshot tools = %+v", snap.Tools)
+	}
+	tools, err := c.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.Tools) != 1 || tools.Tools[0].Description != "changed" {
+		t.Errorf("facade tools = %+v", tools.Tools)
+	}
+}
+
+// rewriteLists makes the backend advertise definitions that the SDK's own
+// registration API would refuse, like a misbehaving third-party server.
+func rewriteLists(backend *mcp.Server, rewrite func(method string, res mcp.Result)) {
+	backend.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			res, err := next(ctx, method, req)
+			if err == nil {
+				rewrite(method, res)
+			}
+			return res, err
+		}
+	})
+}
+
+func TestFacadeDefaultsNilInputSchema(t *testing.T) {
+	backend := rawBackend(t)
+	for _, n := range []string{"nilschema", "emptyschema"} {
+		backend.AddTool(&mcp.Tool{Name: n, InputSchema: objectSchema},
+			func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{}, nil
+			})
+	}
+	rewriteLists(backend, func(method string, res mcp.Result) {
+		if r, ok := res.(*mcp.ListToolsResult); ok {
+			for _, tl := range r.Tools {
+				if tl.Name == "nilschema" {
+					tl.InputSchema = nil
+				} else {
+					tl.InputSchema = map[string]any{"description": "no type"}
+				}
+			}
+		}
+	})
+	f, c := boundFacade(t, backend)
+
+	byName := map[string]*mcp.Tool{}
+	for _, tl := range f.Snapshot().Tools {
+		byName[tl.Name] = tl
+	}
+	if len(byName) != 2 {
+		t.Fatalf("snapshot tools = %v", byName)
+	}
+	for n, tl := range byName {
+		m, ok := tl.InputSchema.(map[string]any)
+		if !ok || m["type"] != "object" {
+			t.Errorf("%s schema = %#v, want type object", n, tl.InputSchema)
+		}
+	}
+	if m := byName["emptyschema"].InputSchema.(map[string]any); m["description"] != "no type" {
+		t.Errorf("existing schema keys must be preserved: %#v", m)
+	}
+	tools, err := c.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.Tools) != 2 {
+		t.Errorf("facade lists %d tools, want 2", len(tools.Tools))
+	}
+}
+
+func TestFacadeSkipsUnregisterableDefinitions(t *testing.T) {
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	backend := newBackend(t, nil) // echo, add, file:///a, file:///{p}, greet
+	for _, n := range []string{"boolschema", "stringschema"} {
+		backend.AddTool(&mcp.Tool{Name: n, InputSchema: objectSchema},
+			func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{}, nil
+			})
+	}
+	backend.AddResourceTemplate(&mcp.ResourceTemplate{URITemplate: "mem:///{q}", Name: "badtpl"},
+		func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+			return &mcp.ReadResourceResult{}, nil
+		})
+	backend.AddResource(&mcp.Resource{URI: "mem:///ok", Name: "badres"},
+		func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+			return &mcp.ReadResourceResult{}, nil
+		})
+	rewriteLists(backend, func(method string, res mcp.Result) {
+		switch r := res.(type) {
+		case *mcp.ListToolsResult:
+			for _, tl := range r.Tools {
+				switch tl.Name {
+				case "boolschema":
+					tl.InputSchema = true
+				case "stringschema":
+					tl.InputSchema = map[string]any{"type": "string"}
+				}
+			}
+		case *mcp.ListResourceTemplatesResult:
+			for _, tp := range r.ResourceTemplates {
+				if tp.Name == "badtpl" {
+					tp.URITemplate = "mem:///{q"
+				}
+			}
+		case *mcp.ListResourcesResult:
+			for _, rs := range r.Resources {
+				if rs.Name == "badres" {
+					rs.URI = "ht tp://%zz"
+				}
+			}
+		}
+	})
+
+	f := proxy.New("test", "1")
+	if err := f.Bind(context.Background(), connectBackend(t, backend, nil)); err != nil {
+		t.Fatalf("Bind/Resync must not fail on rejectable entries: %v", err)
+	}
+	if err := f.Resync(context.Background()); err != nil {
+		t.Fatalf("second Resync: %v", err)
+	}
+	c := connectBackend(t, f.Server(), nil)
+	ctx := context.Background()
+
+	tools, err := c.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tl := range tools.Tools {
+		names = append(names, tl.Name)
+	}
+	if got := fmt.Sprint(sorted(names)); got != "[add echo]" {
+		t.Errorf("tools = %s", got)
+	}
+	tpls, err := c.ListResourceTemplates(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tpls.ResourceTemplates) != 1 || tpls.ResourceTemplates[0].URITemplate != "file:///{p}" {
+		t.Errorf("templates = %+v", tpls.ResourceTemplates)
+	}
+	res, err := c.ListResources(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Resources) != 1 || res.Resources[0].URI != "file:///a" {
+		t.Errorf("resources = %+v", res.Resources)
+	}
+	snap := f.Snapshot()
+	if len(snap.Tools) != 2 || len(snap.ResourceTemplates) != 1 || len(snap.Resources) != 1 {
+		t.Errorf("snapshot must hold only mirrored entries: %d tools, %d templates, %d resources",
+			len(snap.Tools), len(snap.ResourceTemplates), len(snap.Resources))
 	}
 }
