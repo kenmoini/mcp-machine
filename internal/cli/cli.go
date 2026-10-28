@@ -35,7 +35,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case "version":
 		fmt.Fprintf(stdout, "mcp-machine %s (%s, %s)\n", buildinfo.Version, buildinfo.Commit, buildinfo.Date)
 		return exitOK
-	case "serve", "connect", "validate", "import":
+	case "connect":
+		return runConnect(ctx, args[1:], stdin, stdout, stderr)
+	case "serve", "validate", "import":
 		fmt.Fprintf(stderr, "mcp-machine %s: not implemented\n", cmd)
 		return exitRuntime
 	default:

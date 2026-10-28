@@ -60,8 +60,9 @@ func NewOriginProtection(opts Options) (*http.CrossOriginProtection, error) {
 	return p, nil
 }
 
-// Mount registers the streamable HTTP route "/servers/{name}/mcp" on mux.
-// Further transports share the same lookup and origin protection.
+// Mount registers the streamable HTTP route "/servers/{name}/mcp" and the
+// legacy HTTP+SSE route "/servers/{name}/sse" on mux. Both share the same
+// lookup and origin protection.
 func Mount(mux *http.ServeMux, lookup Lookup, opts Options) error {
 	protection, err := NewOriginProtection(opts)
 	if err != nil {
@@ -81,7 +82,12 @@ func Mount(mux *http.ServeMux, lookup Lookup, opts Options) error {
 		Logger:    opts.Logger,
 	}))
 
+	// The SSE handler serves both verbs: GET opens the event stream and
+	// announces the POST endpoint, POST carries client messages.
+	sse := protection.Handler(mcp.NewSSEHandler(getServer, &mcp.SSEOptions{}))
+
 	mux.Handle("/servers/{name}/mcp", withKnownServer(lookup, streamable))
+	mux.Handle("/servers/{name}/sse", withKnownServer(lookup, sse))
 	return nil
 }
 

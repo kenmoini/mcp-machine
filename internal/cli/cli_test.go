@@ -45,7 +45,7 @@ func TestNoArgsIsUsageError(t *testing.T) {
 }
 
 func TestStubCommandsNotImplemented(t *testing.T) {
-	for _, cmd := range []string{"serve", "connect", "validate", "import"} {
+	for _, cmd := range []string{"serve", "validate", "import"} {
 		t.Run(cmd, func(t *testing.T) {
 			code, out, errs := run(t, cmd)
 			want := "mcp-machine " + cmd + ": not implemented\n"
@@ -53,5 +53,21 @@ func TestStubCommandsNotImplemented(t *testing.T) {
 				t.Fatalf("code=%d out=%q err=%q want err=%q", code, out, errs, want)
 			}
 		})
+	}
+}
+
+func TestConnectUsageError(t *testing.T) {
+	for _, args := range [][]string{{"connect"}, {"connect", "http://a", "http://b"}} {
+		code, out, errs := run(t, args...)
+		if code != 2 || out != "" || !strings.Contains(errs, "usage: mcp-machine connect <url>") {
+			t.Fatalf("args=%v code=%d out=%q err=%q", args, code, out, errs)
+		}
+	}
+}
+
+func TestConnectUnreachableIsRuntimeError(t *testing.T) {
+	code, out, errs := run(t, "connect", "http://127.0.0.1:1/servers/demo/mcp")
+	if code != 1 || out != "" || errs == "" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
 	}
 }

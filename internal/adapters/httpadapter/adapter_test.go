@@ -43,8 +43,8 @@ func demoFacade(t *testing.T) *proxy.Facade {
 	return f
 }
 
-// newServer mounts the demo facade under "demo" and serves it.
-func newServer(t *testing.T, opts httpadapter.Options) *httptest.Server {
+// newMux mounts the demo facade under "demo".
+func newMux(t *testing.T, opts httpadapter.Options) *http.ServeMux {
 	t.Helper()
 	f := demoFacade(t)
 	mux := http.NewServeMux()
@@ -57,7 +57,13 @@ func newServer(t *testing.T, opts httpadapter.Options) *httptest.Server {
 	if err := httpadapter.Mount(mux, lookup, opts); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
-	srv := httptest.NewServer(mux)
+	return mux
+}
+
+// newServer serves the demo mux over a real listener.
+func newServer(t *testing.T, opts httpadapter.Options) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(newMux(t, opts))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -198,5 +204,66 @@ func TestGetOnMcpIsRejected(t *testing.T) {
 func TestNewOriginProtectionRejectsBadOrigin(t *testing.T) {
 	if _, err := httpadapter.NewOriginProtection(httpadapter.Options{AllowedOrigins: []string{"not a url"}}); err == nil {
 		t.Fatal("want error for malformed origin")
+	}
+}
+
+func TestSSEListTools(t *testing.T) {
+	srv := newServer(t, httpadapter.Options{})
+	ctx := context.Background()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "1"}, nil).
+		Connect(ctx, &mcp.SSEClientTransport{Endpoint: srv.URL + "/servers/demo/sse"}, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer cs.Close()
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	var names []string
+	for _, tool := range res.Tools {
+		names = append(names, tool.Name)
+	}
+	if len(names) != 1 || names[0] != "ping" {
+		t.Fatalf("tools = %v, want [ping]", names)
+	}
+}
+
+func TestSSEUnknownServerIs404(t *testing.T) {
+	mux := newMux(t, httpadapter.Options{})
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(method, "/servers/nope/sse", strings.NewReader(initBody)))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404", method, rec.Code)
+		}
+		if strings.TrimSpace(rec.Body.String()) != `{"error":"unknown server"}` {
+			t.Fatalf("%s body = %q", method, rec.Body.String())
+		}
+	}
+}
+
+func TestSSECrossOriginDenied(t *testing.T) {
+	mux := newMux(t, httpadapter.Options{})
+	req := httptest.NewRequest(http.MethodPost, "/servers/demo/sse?sessionid=x", strings.NewReader(initBody))
+	for k, v := range evilHeaders {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestSSEUnknownSessionIsRejected(t *testing.T) {
+	mux := newMux(t, httpadapter.Options{})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/servers/demo/sse?sessionid=bogus", strings.NewReader(initBody)))
+	if rec.Code < 400 || rec.Code > 499 || rec.Code == http.StatusForbidden {
+		t.Fatalf("status = %d, want 4xx from the SSE handler (not 403/404-unknown-server body)", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "unknown server") {
+		t.Fatalf("body = %q: request did not reach the SSE handler", rec.Body.String())
 	}
 }
