@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,6 +159,9 @@ func TestGoGitAuthMethod(t *testing.T) {
 	}
 	if _, err := AuthMethod("https://github.com/o/r.git", &config.GitAuth{SSHKeyFile: keyFile}); err == nil {
 		t.Fatal("ssh key with https url: want error")
+	}
+	if _, err := AuthMethod("http://github.com/o/r.git", &config.GitAuth{Token: "tok"}); err == nil || !strings.Contains(err.Error(), "token auth requires an https repo URL") {
+		t.Fatalf("token with http url: err = %v", err)
 	}
 	if _, err := AuthMethod("git@github.com:o/r.git", &config.GitAuth{Token: "tok"}); err == nil {
 		t.Fatal("token with scp url: want error")

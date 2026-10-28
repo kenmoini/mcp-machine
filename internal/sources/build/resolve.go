@@ -87,10 +87,9 @@ func Resolve(cfg *config.Config, spec config.ServerSpec) (sources.Resolved, erro
 		Containerfile: containerfile,
 		Args:          maps.Clone(spec.Build.Args),
 		Auth:          spec.Build.Auth,
-		// The registry hosting the Containerfile's base image is unknown until
-		// build time, so there is nothing to look up here; RegistryAuthFor with
-		// an empty ref matches no entry and yields nil.
-		RegistryAuth: sources.RegistryAuthFor(cfg.Registries, ""),
+		// RegistryAuth stays nil: the registry hosting the Containerfile's base
+		// image is only known once the Containerfile is read. Builder.Build
+		// looks the credentials up (Builder.Registries) after cloning.
 	}}
 	return res, nil
 }

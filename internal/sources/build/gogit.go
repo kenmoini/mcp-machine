@@ -103,7 +103,7 @@ func headSHA(r *git.Repository) (string, error) {
 }
 
 // AuthMethod builds the go-git auth method for repo from the configured
-// credentials. It returns nil for no credentials. A token needs an http(s)
+// credentials. It returns nil for no credentials. A token needs an https
 // URL and an SSH key needs an SSH URL; a mismatch is an error.
 func AuthMethod(repo string, a *config.GitAuth) (transport.AuthMethod, error) {
 	if a == nil || (a.Token == "" && a.SSHKeyFile == "") {
@@ -113,8 +113,8 @@ func AuthMethod(repo string, a *config.GitAuth) (transport.AuthMethod, error) {
 		return nil, errors.New("git auth: set only one of token and ssh_key_file")
 	}
 	if a.Token != "" {
-		if !isHTTPURL(repo) {
-			return nil, fmt.Errorf("git auth: token requires an http(s) repo URL, got %q", repo)
+		if !strings.HasPrefix(repo, "https://") {
+			return nil, fmt.Errorf("git auth: token auth requires an https repo URL, got %q", repo)
 		}
 		return &githttp.BasicAuth{Username: "x-access-token", Password: a.Token}, nil
 	}
@@ -126,10 +126,6 @@ func AuthMethod(repo string, a *config.GitAuth) (transport.AuthMethod, error) {
 		return nil, fmt.Errorf("git auth: load ssh key %s: %w", a.SSHKeyFile, err)
 	}
 	return keys, nil
-}
-
-func isHTTPURL(u string) bool {
-	return strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://")
 }
 
 // isSSHURL reports whether u is an ssh:// URL or scp-style (user@host:path).

@@ -23,6 +23,8 @@ type fakeCloner struct {
 	sha   string
 	calls int
 	err   error
+	// after, if set, runs on the cloned tree (to plant files or symlinks).
+	after func(dir string) error
 }
 
 func (f *fakeCloner) Clone(_ context.Context, _, _, dir string, _ *config.GitAuth) (string, error) {
@@ -49,6 +51,9 @@ func (f *fakeCloner) Clone(_ context.Context, _, _, dir string, _ *config.GitAut
 		}
 		return os.WriteFile(dst, data, 0o644)
 	})
+	if err == nil && f.after != nil {
+		err = f.after(dir)
+	}
 	return f.sha, err
 }
 
@@ -156,5 +161,153 @@ func TestBuilderRejectsShortSHA(t *testing.T) {
 	b := &Builder{Workspace: t.TempDir(), Engine: fake.New(), Cloner: &fakeCloner{sha: "abc"}}
 	if _, err := b.Build(context.Background(), testPlan(), false); err == nil {
 		t.Fatal("want error for short sha")
+	}
+}
+
+func withContainerfile(content string) func(string) error {
+	return func(dir string) error {
+		return os.WriteFile(filepath.Join(dir, "server", "Containerfile"), []byte(content), 0o644)
+	}
+}
+
+func buildAuth(t *testing.T, containerfile string, regs []config.Registry) *runtime.RegistryAuth {
+	t.Helper()
+	eng := fake.New()
+	b := &Builder{
+		Workspace: t.TempDir(), Engine: eng, Registries: regs,
+		Cloner: &fakeCloner{sha: testSHA, after: withContainerfile(containerfile)},
+	}
+	plan := testPlan()
+	plan.RegistryAuth = nil
+	if _, err := b.Build(context.Background(), plan, false); err != nil {
+		t.Fatal(err)
+	}
+	return eng.Builds()[0].Auth
+}
+
+func TestBuilderRegistryAuthFromBaseImage(t *testing.T) {
+	ghcr := []config.Registry{{Registry: "ghcr.io", Username: "gu", Password: "gp"}}
+	hub := []config.Registry{{Registry: "docker.io", Username: "hu", Password: "hp"}}
+	tests := []struct {
+		name, containerfile string
+		regs                []config.Registry
+		want                *runtime.RegistryAuth
+	}{
+		{"matching registry", "FROM ghcr.io/kenmoini/base:1\nRUN true\n", ghcr, &runtime.RegistryAuth{Username: "gu", Password: "gp"}},
+		{"no matching registry", "FROM docker.io/library/node:22\n", ghcr, nil},
+		{"multi-stage picks first image", "FROM ghcr.io/o/a AS build\nRUN x\nFROM build\n", ghcr, &runtime.RegistryAuth{Username: "gu", Password: "gp"}},
+		{"alias is not an image", "FROM scratch AS base\nFROM base AS two\nFROM ghcr.io/o/b\n", ghcr, &runtime.RegistryAuth{Username: "gu", Password: "gp"}},
+		{"case and platform flag", "# c\nfrom --platform=linux/amd64 ghcr.io/o/a:1\n", ghcr, &runtime.RegistryAuth{Username: "gu", Password: "gp"}},
+		{"arg expanded from build args", "ARG A\nFROM ghcr.io/o/${A}\n", ghcr, &runtime.RegistryAuth{Username: "gu", Password: "gp"}},
+		{"docker.io entry does not leak to ghcr base", "FROM ghcr.io/o/a\n", hub, nil},
+		{"docker.io entry applies to hub base", "FROM node:22\n", hub, &runtime.RegistryAuth{Username: "hu", Password: "hp"}},
+		{"scratch only", "FROM scratch\n", hub, nil},
+		{"no from", "RUN true\n", hub, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildAuth(t, tc.containerfile, tc.regs)
+			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+				t.Fatalf("auth = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuilderRejectsBadSubdir(t *testing.T) {
+	for _, sub := range []string{"../x", "..", "a/../../x", "/etc"} {
+		eng := fake.New()
+		cl := &fakeCloner{sha: testSHA}
+		b := &Builder{Workspace: t.TempDir(), Engine: eng, Cloner: cl}
+		plan := testPlan()
+		plan.Subdir = sub
+		if _, err := b.Build(context.Background(), plan, false); err == nil {
+			t.Errorf("subdir %q: want error", sub)
+		}
+		if len(eng.Builds()) != 0 {
+			t.Errorf("subdir %q: built", sub)
+		}
+	}
+}
+
+func TestBuilderRejectsSymlinkEscape(t *testing.T) {
+	outside := t.TempDir()
+	eng := fake.New()
+	cl := &fakeCloner{sha: testSHA, after: func(dir string) error {
+		return os.Symlink(outside, filepath.Join(dir, "escape"))
+	}}
+	b := &Builder{Workspace: t.TempDir(), Engine: eng, Cloner: cl}
+	plan := testPlan()
+	plan.Subdir = "escape"
+	if _, err := b.Build(context.Background(), plan, false); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(eng.Builds()) != 0 {
+		t.Fatal("built with escaping context")
+	}
+}
+
+func TestBuilderAcceptsInRepoSymlinkAndDotSubdir(t *testing.T) {
+	eng := fake.New()
+	cl := &fakeCloner{sha: testSHA, after: func(dir string) error {
+		return os.Symlink("server", filepath.Join(dir, "alias"))
+	}}
+	b := &Builder{Workspace: t.TempDir(), Engine: eng, Cloner: cl}
+	plan := testPlan()
+	plan.Subdir = "alias"
+	if _, err := b.Build(context.Background(), plan, false); err != nil {
+		t.Fatal(err)
+	}
+	plan.Subdir = ""
+	plan.Containerfile = "server/Containerfile"
+	if _, err := b.Build(context.Background(), plan, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuilderValidatesWorkspaceAndName(t *testing.T) {
+	cases := map[string]struct {
+		ws   string
+		name string
+	}{
+		"empty workspace":    {"", "svc"},
+		"relative workspace": {"rel/dir", "svc"},
+		"empty name":         {t.TempDir(), ""},
+		"dotdot name":        {t.TempDir(), ".."},
+		"traversal name":     {t.TempDir(), "../evil"},
+		"slash name":         {t.TempDir(), "a/b"},
+		"uppercase name":     {t.TempDir(), "Svc"},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
+			eng := fake.New()
+			cl := &fakeCloner{sha: testSHA}
+			b := &Builder{Workspace: tc.ws, Engine: eng, Cloner: cl}
+			plan := testPlan()
+			plan.Name = tc.name
+			if _, err := b.Build(context.Background(), plan, false); err == nil {
+				t.Fatal("want error")
+			}
+			if cl.calls != 0 || len(eng.Builds()) != 0 {
+				t.Fatal("cloned or built despite invalid input")
+			}
+		})
+	}
+}
+
+func TestBuilderDoesNotDeleteOutsideWorkspace(t *testing.T) {
+	parent := t.TempDir()
+	victim := filepath.Join(parent, "victim")
+	if err := os.MkdirAll(filepath.Join(victim, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := &Builder{Workspace: filepath.Join(parent, "ws"), Engine: fake.New(), Cloner: &fakeCloner{sha: testSHA}}
+	plan := testPlan()
+	plan.Name = "../../victim"
+	if _, err := b.Build(context.Background(), plan, false); err == nil {
+		t.Fatal("want error")
+	}
+	if !exists(filepath.Join(victim, "src")) {
+		t.Fatal("directory outside workspace was removed")
 	}
 }

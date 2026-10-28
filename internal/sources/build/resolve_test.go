@@ -106,3 +106,15 @@ func TestBuildResolveErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildResolveLeavesRegistryAuthNil(t *testing.T) {
+	cfg := resolveCfg()
+	cfg.Registries = []config.Registry{{Registry: "docker.io", Username: "u", Password: "p"}}
+	res, err := Resolve(cfg, config.ServerSpec{Name: "svc", Build: &config.BuildSpec{Repo: "r"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Image.Build.RegistryAuth != nil {
+		t.Fatalf("RegistryAuth = %+v; want nil", res.Image.Build.RegistryAuth)
+	}
+}
