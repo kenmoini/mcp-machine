@@ -73,6 +73,12 @@ jobs:
 
       - name: Check out code
         uses: actions/checkout@v7
+        with:
+          # git describe needs the tags.
+          fetch-depth: 0
+
+      - name: Set version
+        run: echo "MCPM_VERSION=$(git describe --tags --always --dirty)" >> "$GITHUB_ENV"
 
       - name: Docker meta
         id: meta
@@ -98,14 +104,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CACHE_BREAKER=${{ github.event.inputs.cache_breaker }}
-            MCPM_VERSION=${{ steps.meta.outputs.version }}
+            MCPM_VERSION=${{ env.MCPM_VERSION }}
             MCPM_COMMIT=${{ github.sha }}
             MCPM_DATE=${{ steps.buildinfo.outputs.date }}
           # Supply-chain attestations (perms granted above).
           provenance: mode=max
           sbom: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=release
+          cache-to: type=gha,mode=max,scope=release
 
       - name: Export digest
         run: |
@@ -196,12 +202,13 @@ jobs:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           format: sarif
           output: trivy-results.sarif
+          limit-severities-for-sarif: true
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '0'
 
       - name: Upload Trivy SARIF
-        if: always()
+        if: ${{ !cancelled() && hashFiles('trivy-results.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif

@@ -16,7 +16,7 @@ All 32 plan tasks were implemented test-first by a fresh subagent each, reviewed
 
 Run outside the sandbox on this Mac:
 
-- `make lint` (vet and staticcheck) clean; `make fmt-check` clean.
+- `make lint` (golangci-lint) clean; `make fmt-check` clean.
 - `make test`: all 20 packages pass, including the listener-based tests for the adapters, the stdio bridge, the manager's http-mode path, and the `serve` wiring.
 - `go test -race` on the manager, web, config, adapters, sources, and runtime packages: no races.
 - `make test-integration` against the rootful podman machine socket: pass (ping, network, pull, attach/echo round trip, logs, stop, remove, build, bad-credential pull, network connect).
@@ -27,7 +27,17 @@ Not verified: the Quadlet units on a Fedora or RHEL host, rootless Podman, and S
 
 ## Environment notes for future work
 
-- The sandbox blocks local port binding, the race detector, Go module downloads, and git. Use `export GOCACHE=$PWD/.gocache STATICCHECK_CACHE=$PWD/.gocache/staticcheck GOPROXY=off GOFLAGS=-mod=mod -buildvcs=false` for builds and tests inside the sandbox, and run listener tests, `-race`, `go mod tidy`, git, and `make image` outside it. Setting `sandbox.network.allowLocalBinding: true` in Claude Code settings lifts the port restriction.
+- The sandbox blocks local port binding, the race detector, Go module downloads, and git. Setting `sandbox.network.allowLocalBinding: true` in Claude Code settings lifts the port restriction. Inside the sandbox, use this recipe, and run listener tests, `-race`, `govulncheck`, `go mod tidy`, git, and `make image` outside it:
+
+  ```sh
+  export GOCACHE=$PWD/.gocache GOLANGCI_LINT_CACHE=$PWD/.gocache/golangci GOPROXY=off \
+    GOFLAGS="-mod=mod -buildvcs=false" PATH=$(go env GOPATH)/bin:$PATH
+
+  go test -tags remote,containers_image_openpgp,exclude_graphdriver_btrfs,exclude_graphdriver_devicemapper -count=1 \
+    -skip 'TestHttpMode|TestServe|TestDialHTTP|TestStreamable|TestSSE|TestBridge|TestUnknownServerIs404|TestCrossOrigin|TestAllowedOrigin|TestPublicURLOrigin|TestNoOrigin|TestGetOnMcp' ./...
+  ```
+
+  The `-skip` list covers the tests that bind a listener.
 - The podman machine is rootful; `MCP_MACHINE_PODMAN_SOCKET=unix://$HOME/.local/share/containers/podman/machine/podman.sock` runs the integration tests.
 - inotify events do not cross the macOS virtiofs mount, so the config watcher will not see host-side edits on this Mac; use the UI's Reload button or `POST /config/reload`.
 

@@ -56,20 +56,7 @@ MCP_MACHINE_PODMAN_SOCKET=unix:///run/podman/podman.sock make test-integration
 
 With `podman machine` on macOS, use the socket path from `podman machine inspect`, for example `unix://$HOME/.local/share/containers/podman/machine/podman.sock`.
 
-### Working in a restricted sandbox
-
-Some sandboxes (including the one used for AI-assisted work on this repo) block local port binding, the race detector, module downloads, and `git`. This recipe works inside them:
-
-```sh
-export GOCACHE=$PWD/.gocache STATICCHECK_CACHE=$PWD/.gocache/staticcheck \
-  GOLANGCI_LINT_CACHE=$PWD/.gocache/golangci GOPROXY=off \
-  GOFLAGS="-mod=mod -buildvcs=false" PATH=$(go env GOPATH)/bin:$PATH
-
-go test -tags remote,containers_image_openpgp,exclude_graphdriver_btrfs,exclude_graphdriver_devicemapper -count=1 \
-  -skip 'TestHttpMode|TestServe|TestDialHTTP|TestStreamable|TestSSE|TestBridge|TestUnknownServerIs404|TestCrossOrigin|TestAllowedOrigin|TestPublicURLOrigin|TestNoOrigin|TestGetOnMcp' ./...
-```
-
-The skipped tests bind a listener; run them, `-race`, `govulncheck`, and `go mod tidy` outside the sandbox. See `docs/build-recap.md` for more environment notes.
+Working in a restricted sandbox (no port binding, no network, no `git`)? See "Environment notes" in [docs/build-recap.md](docs/build-recap.md).
 
 ## Commit messages
 

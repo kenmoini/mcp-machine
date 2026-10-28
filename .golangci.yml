@@ -61,6 +61,7 @@ linters:
     generated: lax
     presets:
       - comments
+      # Accepted default: unchecked Close/Remove/Flush/print errors are not reported.
       - std-error-handling
     rules:
       - path: _test\.go

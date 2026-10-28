@@ -6,7 +6,9 @@ Security fixes are made on the latest `main` and released in the latest tagged r
 
 ## Reporting a vulnerability
 
-Please report vulnerabilities privately through GitHub security advisories: open the repository's **Security** tab and choose **Report a vulnerability**. Do not open a public issue or pull request for a suspected vulnerability.
+Please report vulnerabilities privately through GitHub security advisories: open the repository's **Security** tab and choose **Report a vulnerability**. Do not open a public issue or pull request for a suspected vulnerability. If private reporting is not enabled on the repository, email the maintainer at the address in `LICENSE`.
+
+<!-- Maintainer: private vulnerability reporting must be enabled in Settings → Code security. -->
 
 Include what you found, the version or commit, how to reproduce it, and the impact you expect. You can expect an acknowledgement within a few days. Fixes are developed in a private advisory and published with a release.
 

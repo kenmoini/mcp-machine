@@ -36,7 +36,7 @@ func TestMapErr(t *testing.T) {
 	for _, code := range []int{http.StatusConflict, http.StatusInternalServerError, http.StatusBadRequest} {
 		in := &errorhandling.ErrorModel{Message: "x", ResponseCode: code}
 		out := mapErr(in)
-		if !errors.Is(out, error(in)) {
+		if out != error(in) { //nolint:errorlint // identity is the contract
 			t.Errorf("code %d: error should pass through unchanged, got %v", code, out)
 		}
 		if errors.Is(out, runtime.ErrNotFound) {
@@ -45,7 +45,7 @@ func TestMapErr(t *testing.T) {
 	}
 
 	plain := errors.New("boom")
-	if out := mapErr(plain); !errors.Is(out, plain) {
+	if out := mapErr(plain); out != plain { //nolint:errorlint // identity is the contract
 		t.Errorf("non-ErrorModel error should pass through, got %v", out)
 	}
 }

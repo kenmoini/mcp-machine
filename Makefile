@@ -21,15 +21,20 @@ HTMX_URL    = https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js
 HTMX_FILE   = internal/web/static/htmx.min.js
 HTMX_SHA256 = 71ea67185bfa8c98c39d31717c6fce5d852370fcdfd129db4543774d3145c0de
 
+# Tool versions live here only; CI installs them through `make tools`.
 GOLANGCI_LINT_VERSION ?= v2.15.0
-GOBIN_DIR := $(shell go env GOPATH)/bin
+GOVULNCHECK_VERSION   ?= v1.9.0
+GOBIN_DIR := $(or $(shell go env GOBIN),$(firstword $(subst :, ,$(shell go env GOPATH)))/bin)
 export PATH := $(GOBIN_DIR):$(PATH)
 
-# The go.mod toolchain line (go1.27.3) is honoured when GOTOOLCHAIN is unset or
-# "auto". Some shells export it empty, which pins the local toolchain; restore
-# the default so builds, tests and govulncheck use the patched toolchain.
+# The go.mod toolchain line (go1.27.3) is honoured when GOTOOLCHAIN is "auto",
+# which is also what an unset variable falls back to via $GOROOT/go.env. Some
+# shells export it empty, which pins the local toolchain; only in that case
+# restore "auto" so builds, tests and govulncheck use the patched toolchain.
+ifeq ($(origin GOTOOLCHAIN),environment)
 ifeq ($(GOTOOLCHAIN),)
 export GOTOOLCHAIN := auto
+endif
 endif
 
 .PHONY: build test test-race test-integration vet lint fmt fmt-check vuln cover check tools run validate image push \
@@ -65,12 +70,12 @@ cover:
 	go tool cover -func=coverage.out | tail -n 1
 	go tool cover -html=coverage.out -o coverage.html
 
-# Everything CI runs, in the same order the jobs would fail fastest.
-check: fmt-check lint vuln test
+# What CI runs locally, minus the container scan.
+check: fmt-check lint vuln test-race
 
 tools:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-	go install golang.org/x/vuln/cmd/govulncheck@latest
+	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 
 fmt:
 	gofmt -w cmd internal test
