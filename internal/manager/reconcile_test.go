@@ -1,8 +1,10 @@
 package manager_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -424,5 +426,82 @@ func TestCreateReplacesConflictingContainer(t *testing.T) {
 				t.Error("conflicting container was used")
 			}
 		})
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the concurrent writes of a manager's
+// logger.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func seedGhost(h *harness) {
+	h.eng.Seed(runtime.ContainerInfo{ // a server that is not in the config
+		ID: "seed-ghost", Name: store.ContainerName("ghost"), Image: "img:1", State: "running",
+		Labels: store.Labels("ghost", "whatever", "stdio"),
+	})
+}
+
+func TestApplyKeepsUnknownContainersWhenSet(t *testing.T) {
+	logs := &syncBuffer{}
+	h := newHarness(t, manager.Options{Logger: slog.New(slog.NewTextHandler(logs, nil))})
+	seedGhost(h)
+	h.m.SetKeepUnknown(true)
+	h.apply()
+
+	if _, err := h.eng.InspectContainer(context.Background(), "seed-ghost"); err != nil {
+		t.Errorf("unknown container was not kept: %v", err)
+	}
+	if n := h.count("RemoveContainer"); n != 0 {
+		t.Errorf("RemoveContainer called %d times, want 0", n)
+	}
+	if !strings.Contains(logs.String(), "keeping unknown container") {
+		t.Errorf("log lacks %q:\n%s", "keeping unknown container", logs.String())
+	}
+}
+
+func TestApplyRemovesUnknownContainersByDefault(t *testing.T) {
+	h := newHarness(t, manager.Options{})
+	seedGhost(h)
+	h.apply()
+
+	if _, err := h.eng.InspectContainer(context.Background(), "seed-ghost"); !errors.Is(err, runtime.ErrNotFound) {
+		t.Errorf("unknown container not removed: %v", err)
+	}
+}
+
+func TestApplyKeepUnknownStillReplacesStaleKnown(t *testing.T) {
+	h := newHarness(t, manager.Options{})
+	h.m.SetKeepUnknown(true)
+	h.eng.Seed(runtime.ContainerInfo{ // server a, but created for another spec
+		ID: "seed-1", Name: store.ContainerName("a"), Image: "img:0", State: "running",
+		Labels: store.Labels("a", "stale", "stdio"),
+	})
+	seedGhost(h)
+	h.apply()
+	serveNext(t, h, "seed-1")
+	st := waitState(t, h.reg, "a", store.StateReady)
+
+	if st.ContainerID == "seed-1" {
+		t.Fatal("the stale container was adopted")
+	}
+	if _, err := h.eng.InspectContainer(context.Background(), "seed-1"); !errors.Is(err, runtime.ErrNotFound) {
+		t.Errorf("stale known container not removed: %v", err)
+	}
+	if _, err := h.eng.InspectContainer(context.Background(), "seed-ghost"); err != nil {
+		t.Errorf("unknown container was not kept: %v", err)
 	}
 }

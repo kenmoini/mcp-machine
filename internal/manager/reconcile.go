@@ -92,7 +92,7 @@ func (m *Manager) Apply(ctx context.Context, cfg *config.Config) error {
 	}
 	var adopted map[string]runtime.ContainerInfo
 	if !m.adopted {
-		listed, err := m.adopt(ctx, cfg, desired, owned)
+		listed, err := m.adopt(ctx, cfg, desired, inConfig, owned)
 		if errors.Is(err, ErrAdoptionScan) {
 			// Starting servers now could destroy containers that the next
 			// scan would adopt: start nothing, and scan again next time.
@@ -238,8 +238,9 @@ var ErrAdoptionScan = errors.New("manager: adoption scan failed")
 // restart), a stdio one stopped first if it is running, since a running
 // container's stdio cannot be re-attached safely. Every other managed
 // container (stale hash, disabled or unknown server, duplicate) is stopped
-// and removed.
-func (m *Manager) adopt(ctx context.Context, cfg *config.Config, desired map[string]string, owned map[string]bool) (map[string]runtime.ContainerInfo, error) {
+// and removed, except that with SetKeepUnknown, containers of servers that
+// are not in inConfig are left as they are.
+func (m *Manager) adopt(ctx context.Context, cfg *config.Config, desired map[string]string, inConfig, owned map[string]bool) (map[string]runtime.ContainerInfo, error) {
 	list, err := m.engine.ListContainers(ctx, map[string]string{store.LabelManaged: "true"})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrAdoptionScan, err)
@@ -269,6 +270,10 @@ func (m *Manager) adopt(ctx context.Context, cfg *config.Config, desired map[str
 				adopted[lbl.Name] = info
 				continue
 			}
+		}
+		if m.keepUnknown.Load() && !inConfig[lbl.Name] {
+			m.log.Info("manager: keeping unknown container", "server", lbl.Name, "container", info.ID)
+			continue
 		}
 		m.log.Info("manager: removing stale container", "server", lbl.Name, "container", info.ID)
 		_ = m.engine.StopContainer(ctx, info.ID, timeout)

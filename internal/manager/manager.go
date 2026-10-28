@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -70,11 +71,20 @@ type Manager struct {
 	adopted     bool // the adoption scan has listed the containers; guarded by reconcileMu
 	joined      bool // the network join has been attempted; guarded by reconcileMu
 
+	keepUnknown atomic.Bool // leave labeled containers of unconfigured servers alone; see SetKeepUnknown
+
 	mu      sync.Mutex // guards the fields below; never held while waiting on a runner
 	cfg     *config.Config
 	runners map[string]*runner
 	closed  bool
 }
+
+// SetKeepUnknown makes Apply leave labeled containers of servers that are
+// not in the configuration alone (logged at info) instead of removing them.
+// Stale containers of known servers are still replaced. It guards against a
+// missing configuration mount removing running servers, and takes effect at
+// the next Apply that performs the adoption scan.
+func (m *Manager) SetKeepUnknown(keep bool) { m.keepUnknown.Store(keep) }
 
 // New returns a manager. builder may be nil when no server uses a build plan.
 func New(engine runtime.Engine, resolver sources.Resolver, builder Builder, reg *store.Registry, opts Options) *Manager {
