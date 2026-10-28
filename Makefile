@@ -26,16 +26,16 @@ test-race:
 	go test -tags $(GOTAGS) -race -count=1 ./...
 
 test-integration:
-	go test -tags "$(GOTAGS) integration" -count=1 ./test/integration/...
+	go test -tags $(GOTAGS),integration -count=1 ./test/integration/...
 
 lint:
 	go vet -tags $(GOTAGS) ./... && go tool staticcheck -tags $(GOTAGS) ./...
 
 fmt:
-	gofmt -w cmd internal
+	gofmt -w cmd internal test
 
 fmt-check:
-	@out="$$(gofmt -l cmd internal)"; \
+	@out="$$(gofmt -l cmd internal test)"; \
 	if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 run: build
