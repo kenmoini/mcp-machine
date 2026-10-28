@@ -11,6 +11,7 @@ require (
 	go.podman.io/common v0.69.2
 	go.podman.io/image/v5 v5.41.2
 	go.podman.io/podman/v6 v6.1.4
+	golang.org/x/crypto v0.57.0
 	gopkg.in/yaml.v3 v3.0.1
 	mvdan.cc/sh/v3 v3.14.1
 )
@@ -137,7 +138,6 @@ require (
 	go.podman.io/storage v1.64.2 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.59.0 // indirect

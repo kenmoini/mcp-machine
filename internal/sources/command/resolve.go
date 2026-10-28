@@ -168,3 +168,7 @@ func parsePort(p string) (runtime.PortMapping, error) {
 	}
 	return runtime.PortMapping{HostIP: ip, HostPort: host, ContainerPort: cont, Protocol: proto}, nil
 }
+
+// ParseVolume parses "src:dst[:ro]" into a bind mount. It is exported so other
+// resolvers apply the same volume syntax.
+func ParseVolume(v string) (runtime.Mount, error) { return parseVolume(v) }
