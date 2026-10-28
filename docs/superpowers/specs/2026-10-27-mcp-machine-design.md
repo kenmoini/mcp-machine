@@ -43,10 +43,10 @@ Verified on 2026-10-27.
 **MCP protocol.** The current spec revision is 2026-07-28 and it changed the wire protocol substantially: no `initialize` handshake, every request carries `_meta` with protocol version and client info, a new `server/discover` RPC, Streamable HTTP is POST-only (the GET stream, `Mcp-Session-Id`, and `Last-Event-ID` are gone), server-initiated requests became multi-round-trip results, and change notifications arrive through `subscriptions/listen`. Revisions 2025-11-25 and earlier are "legacy" (initialize plus sessions). HTTP+SSE from 2024-11-05 is deprecated but still used by older clients; a server supporting them hosts `/sse` plus a POST endpoint beside `/mcp`. Servers must validate the `Origin` header. Claude Code marks SSE deprecated and tries HTTP first, falling back to SSE.
 Sources: https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http , https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning , https://code.claude.com/docs/en/mcp
 
-**Go SDK.** `github.com/modelcontextprotocol/go-sdk` v1.8.0 (Sep 2026), requires Go 1.25. Serves 2026-07-28 and every legacy revision. Serving modern clients over HTTP requires `StreamableHTTPOptions{Stateless: true}`; legacy clients still negotiate down on the same endpoint. `NewSSEHandler` remains for HTTP+SSE clients. The client side negotiates era automatically. Transports: `StreamableClientTransport`, `SSEClientTransport`, `CommandTransport`, `IOTransport` (any `io.ReadWriteCloser`), `StdioTransport`, in-memory pairs for tests. Low-level `Server.AddTool`, `AddResource`, `AddResourceTemplate`, `AddPrompt` take raw handlers with unvalidated `json.RawMessage` arguments, and `ClientOptions` exposes list-changed handlers. The SDK's examples contain no proxy; the facade is ours.
+**Go SDK.** `github.com/modelcontextprotocol/go-sdk` v1.8.0 (Sep 2026), requires Go 1.25. Its Streamable and SSE handlers reject requests that arrive on a loopback address with a non-loopback `Host` header (DNS rebinding protection) and accept an `http.CrossOriginProtection` from the standard library for Origin checks. Serves 2026-07-28 and every legacy revision. Serving modern clients over HTTP requires `StreamableHTTPOptions{Stateless: true}`; legacy clients still negotiate down on the same endpoint. `NewSSEHandler` remains for HTTP+SSE clients. The client side negotiates era automatically. Transports: `StreamableClientTransport`, `SSEClientTransport`, `CommandTransport`, `IOTransport` (any `io.ReadWriteCloser`), `StdioTransport`, in-memory pairs for tests. Low-level `Server.AddTool`, `AddResource`, `AddResourceTemplate`, `AddPrompt` take raw handlers with unvalidated `json.RawMessage` arguments, and `ClientOptions` exposes list-changed handlers. The SDK's examples contain no proxy; the facade is ours.
 Sources: https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.7.0 , https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.8.0
 
-**Podman.** Go bindings are `go.podman.io/podman/v6` (v6.1.4, Oct 2026). Minimal server API is 4.0.0, so the client works against Podman 4.x, 5.x, and 6.x. `images.Build` needs a local context directory (it tars it over the socket), so repos are cloned first. `containers.Attach` gives a bidirectional hijacked stream to a container created with stdin open; attach must happen before start or early output is lost. Quadlet has `.container` and `.network` units; rootful units live in `/etc/containers/systemd/`, rootless in `~/.config/containers/systemd/`.
+**Podman.** Go bindings are `go.podman.io/podman/v6` (v6.1.4, Oct 2026), which require **Go 1.26**, so the project's Go floor is 1.26. Minimal server API is 4.0.0, so the client works against Podman 4.x, 5.x, and 6.x. `images.Build` needs a local context directory (it tars it over the socket), so repos are cloned first. `containers.Attach` gives a bidirectional hijacked stream to a container created with stdin open; attach must happen before start or early output is lost. Quadlet has `.container` and `.network` units; rootful units live in `/etc/containers/systemd/`, rootless in `~/.config/containers/systemd/`.
 Source: https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html
 
 **Images and libraries.** `registry.access.redhat.com/ubi9/go-toolset` has Go 1.26 tags. `ubi9/ubi-minimal:9.8` is the newest runtime tag. htmx 2.0.10 is the latest 2.x; htmx 4.0.0 (Aug 2026) renamed attributes and moved SSE to an extension, so we pin 2.0.10 and vendor the one JS file. `mcp-remote` 0.15.2 supports the new era and serves as a documented alternative stdio bridge.
@@ -97,7 +97,7 @@ clients (Claude Code, Cursor, mcp-machine connect, mcp-remote)
 
 **Credentials.** A top-level `registries:` list (host, username, password) is matched by longest host prefix against image references and passed to pull and build. Git credentials live under `build.auth` as `token` (HTTPS basic auth) or `ssh_key_file`.
 
-**Origin validation** on the MCP routes only. Allowlist = `allowed_origins` + the `public_url` host + localhost. Requests with no Origin header (CLI clients) pass.
+**Origin validation** on the MCP routes only, using the standard library's `http.CrossOriginProtection` passed to the SDK handlers. Same-origin requests and requests with no Origin header (CLI clients) pass; cross-origin requests pass only if the exact origin is listed in `allowed_origins` or equals the `public_url` origin. The SDK's loopback DNS rebinding protection stays enabled.
 
 **TLS.** `tls.cert_file` and `tls.key_file`; when both are set the server listens on TLS only.
 
@@ -113,7 +113,7 @@ podman:
   stop_timeout: 10s
 workspace_dir: /data/workspace         # git clones + build contexts
 data_dir: /data                        # caches
-allowed_origins: ["http://localhost:*"]
+allowed_origins: []                    # exact origins, e.g. "http://mcp.lan:8080"; public_url is always allowed
 registries:
   - registry: ghcr.io
     username: "${GHCR_USER}"
