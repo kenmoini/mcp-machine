@@ -1,0 +1,60 @@
+# MCP Machine example configuration.
+# Copy to config.yaml and edit. ${VAR} placeholders are expanded from the
+# environment at load time; every field shown here is optional unless noted.
+
+listen: ":8080"
+public_url: "http://mcp.lan:8080"      # used in connect snippets + default allowed origin
+tls: { cert_file: "", key_file: "" }   # both or neither
+podman:
+  socket: "unix:///run/podman/podman.sock"   # env MCP_MACHINE_PODMAN_SOCKET overrides
+  network: mcp-machine
+  stop_timeout: 10s
+workspace_dir: /data/workspace         # git clones + build contexts
+data_dir: /data                        # caches
+allowed_origins: []                    # exact origins, e.g. "http://mcp.lan:8080"; public_url is always allowed
+registries:
+  - registry: ghcr.io
+    username: "${GHCR_USER}"
+    password: "${GHCR_TOKEN}"
+runtimes:                              # images used for `command` servers
+  npx:  docker.io/library/node:22-bookworm-slim
+  node: docker.io/library/node:22-bookworm-slim
+  uvx:  ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+  python: docker.io/library/python:3.12-slim
+log: { level: info, format: text }
+
+servers:
+  - name: github-remote                # DNS label; container name becomes mcpm-<name>
+    type: remote
+    remote:
+      url: https://api.githubcopilot.com/mcp/
+      transport: http                  # http | sse | auto
+      headers: { Authorization: "Bearer ${GITHUB_TOKEN}" }
+
+  - name: filesystem
+    type: command
+    command:
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/projects"]
+      env: { LOG_LEVEL: debug }
+    container:                         # optional overrides on the generated spec
+      volumes: ["/srv/projects:/projects:ro"]
+      image: docker.io/library/node:20
+
+  - name: fetch
+    type: command
+    command:
+      run: "docker run -i --rm -e FOO=bar ghcr.io/example/fetch-mcp:latest --verbose"
+
+  - name: my-server
+    type: build
+    build:
+      repo: https://github.com/example/my-mcp-server.git
+      ref: main
+      subdir: server
+      containerfile: Containerfile
+      args: { NODE_ENV: production }
+      auth: { token: "${GITHUB_TOKEN}" }   # or ssh_key_file: /data/keys/id_ed25519
+    serve: { mode: http, port: 3000, path: /mcp, transport: http }   # mode stdio (default) | http
+    env: { PORT: "3000" }
+    enabled: true

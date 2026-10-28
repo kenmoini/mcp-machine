@@ -49,59 +49,59 @@ type LogConfig struct {
 type ServerSpec struct {
 	Name      string              `yaml:"name"`
 	Type      string              `yaml:"type"`
-	Enabled   *bool               `yaml:"enabled"`
-	Remote    *RemoteSpec         `yaml:"remote"`
-	Command   *CommandSpec        `yaml:"command"`
-	Build     *BuildSpec          `yaml:"build"`
-	Serve     *ServeSpec          `yaml:"serve"`
-	Container *ContainerOverrides `yaml:"container"`
-	Env       map[string]string   `yaml:"env"`
+	Enabled   *bool               `yaml:"enabled,omitempty"`
+	Remote    *RemoteSpec         `yaml:"remote,omitempty"`
+	Command   *CommandSpec        `yaml:"command,omitempty"`
+	Build     *BuildSpec          `yaml:"build,omitempty"`
+	Serve     *ServeSpec          `yaml:"serve,omitempty"`
+	Container *ContainerOverrides `yaml:"container,omitempty"`
+	Env       map[string]string   `yaml:"env,omitempty"`
 }
 
 // RemoteSpec describes a remote MCP server reached over HTTP or SSE.
 type RemoteSpec struct {
-	URL       string            `yaml:"url"`
-	Transport string            `yaml:"transport"`
-	Headers   map[string]string `yaml:"headers"`
+	URL       string            `yaml:"url,omitempty"`
+	Transport string            `yaml:"transport,omitempty"`
+	Headers   map[string]string `yaml:"headers,omitempty"`
 }
 
 // CommandSpec describes a server launched from a command inside a runtime image.
 type CommandSpec struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	Env     map[string]string `yaml:"env"`
-	Run     string            `yaml:"run"`
+	Command string            `yaml:"command,omitempty"`
+	Args    []string          `yaml:"args,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
+	Run     string            `yaml:"run,omitempty"`
 }
 
 // BuildSpec describes a server built from a git repository.
 type BuildSpec struct {
-	Repo          string            `yaml:"repo"`
-	Ref           string            `yaml:"ref"`
-	Subdir        string            `yaml:"subdir"`
-	Containerfile string            `yaml:"containerfile"`
-	Args          map[string]string `yaml:"args"`
-	Auth          *GitAuth          `yaml:"auth"`
+	Repo          string            `yaml:"repo,omitempty"`
+	Ref           string            `yaml:"ref,omitempty"`
+	Subdir        string            `yaml:"subdir,omitempty"`
+	Containerfile string            `yaml:"containerfile,omitempty"`
+	Args          map[string]string `yaml:"args,omitempty"`
+	Auth          *GitAuth          `yaml:"auth,omitempty"`
 }
 
 // GitAuth holds git credentials for a build source.
 type GitAuth struct {
-	Token      string `yaml:"token"`
-	SSHKeyFile string `yaml:"ssh_key_file"`
+	Token      string `yaml:"token,omitempty"`
+	SSHKeyFile string `yaml:"ssh_key_file,omitempty"`
 }
 
 // ServeSpec describes how a container exposes its MCP endpoint.
 type ServeSpec struct {
-	Mode      string `yaml:"mode"`
-	Port      int    `yaml:"port"`
-	Path      string `yaml:"path"`
-	Transport string `yaml:"transport"`
+	Mode      string `yaml:"mode,omitempty"`
+	Port      int    `yaml:"port,omitempty"`
+	Path      string `yaml:"path,omitempty"`
+	Transport string `yaml:"transport,omitempty"`
 }
 
 // ContainerOverrides are optional overrides on the generated container spec.
 type ContainerOverrides struct {
-	Image   string            `yaml:"image"`
-	Volumes []string          `yaml:"volumes"`
-	Env     map[string]string `yaml:"env"`
+	Image   string            `yaml:"image,omitempty"`
+	Volumes []string          `yaml:"volumes,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
 }
 
 // IsEnabled reports whether the server is enabled; an unset flag means true.
