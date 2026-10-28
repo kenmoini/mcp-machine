@@ -83,3 +83,24 @@ func TestHashIsStable(t *testing.T) {
 		t.Fatalf("Hash = %q, want %q", got, golden)
 	}
 }
+
+func TestHashStableAcrossLayers(t *testing.T) {
+	headers := "      transport: sse\n      headers: {A: \"1\", B: \"2\"}\n"
+	one := layoutDir(t, map[string]string{"config.yaml": remoteYAML("a", headers)})
+	split := layoutDir(t, map[string]string{
+		"config.yaml":     remoteYAML("a", ""),
+		"config.d/a.yaml": "servers:\n  - name: a\n    remote:\n" + headers,
+	})
+	hash := func(l config.Layout) string {
+		t.Helper()
+		set, err := l.Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		s := set.Config.Servers[0]
+		return config.Hash(s, s.RuntimeImage(set.Config))
+	}
+	if a, b := hash(one), hash(split); a != b {
+		t.Errorf("hash differs across layers: %s vs %s", a, b)
+	}
+}

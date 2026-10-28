@@ -31,7 +31,7 @@ var defaultRuntimes = map[string]string{
 func Parse(data []byte, lookup func(string) (string, bool)) (*Config, error) {
 	c, err := decode(data)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := finish(c, lookup); err != nil {
 		return nil, err
@@ -41,13 +41,14 @@ func Parse(data []byte, lookup func(string) (string, bool)) (*Config, error) {
 
 // decode strictly decodes YAML config data. Unknown keys are errors and an
 // empty document yields a zero Config. No defaults are applied and no
-// variables are expanded.
+// variables are expanded. Errors carry no "config:" prefix; callers add
+// their own context.
 func decode(data []byte) (*Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	c := &Config{}
 	if err := dec.Decode(c); err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("config: parse: %w", err)
+		return nil, fmt.Errorf("parse: %w", err)
 	}
 	return c, nil
 }
@@ -58,45 +59,46 @@ func finish(c *Config, lookup func(string) (string, bool)) error {
 	return expandEnv(c, lookup)
 }
 
+// dropIn is the shape of a drop-in file: a servers list and nothing else.
+type dropIn struct {
+	Servers []ServerSpec `yaml:"servers"`
+}
+
 // decodeDropIn strictly decodes a drop-in file, which may hold only a
 // servers list. A global key is an error naming the key. No defaults are
-// applied and no variables are expanded.
+// applied and no variables are expanded. Errors carry no "config:" prefix.
 func decodeDropIn(data []byte) ([]ServerSpec, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
-	var d struct {
-		Servers []ServerSpec `yaml:"servers"`
-	}
+	var d dropIn
 	if err := dec.Decode(&d); err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("config: parse: %w", err)
+		return nil, fmt.Errorf("parse: %w", err)
 	}
 	return d.Servers, nil
 }
 
-// errEmptyFile reports a config file with no content.
-var errEmptyFile = errors.New("config: file is empty")
+// errEmptyFile reports a config file with no content. It carries no
+// "config:" prefix; the loader reports it as "config: <file>: file is empty".
+var errEmptyFile = errors.New("file is empty")
 
-// Load reads and parses the config file at path. An empty or whitespace-only
-// file is an error ("config: file is empty") so a half-written file is never
-// mistaken for an all-defaults config. The file is read exactly once. The
-// environment variable MCP_MACHINE_PODMAN_SOCKET, when set, overrides
-// podman.socket.
+// Load reads and parses the single config file at path: the file-mode
+// wrapper over Layout{BaseFile: path}.Load. Unlike a layered load, a missing
+// file is an error, and an empty or whitespace-only file is the error
+// "config: file is empty" so a half-written file is never mistaken for an
+// all-defaults config. The file is read exactly once. The environment
+// variable MCP_MACHINE_PODMAN_SOCKET, when set, overrides podman.socket.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // G304: path is the operator-chosen config file
+	set, err := Layout{BaseFile: path}.Load()
 	if err != nil {
-		return nil, fmt.Errorf("config: read %s: %w", path, err)
-	}
-	if len(bytes.TrimSpace(data)) == 0 {
-		return nil, errEmptyFile
-	}
-	c, err := Parse(data, os.LookupEnv)
-	if err != nil {
+		if errors.Is(err, errEmptyFile) {
+			return nil, fmt.Errorf("config: %w", errEmptyFile)
+		}
 		return nil, err
 	}
-	if v, ok := os.LookupEnv(podmanSocketEnv); ok && v != "" {
-		c.Podman.Socket = v
+	if len(set.Files) == 0 {
+		return nil, fmt.Errorf("config: %s: %w", path, os.ErrNotExist)
 	}
-	return c, nil
+	return set.Config, nil
 }
 
 // ApplyDefaults fills unset fields with their default values. Per-server
