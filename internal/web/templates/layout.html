@@ -18,6 +18,9 @@
   {{- end}}
   <a href="/config"{{if eq .Active "config"}} aria-current="page"{{end}}>Config</a>
 </nav>
+{{- if .EditNotice}}
+<div class="warn banner">{{.EditNotice}}</div>
+{{- end}}
 <div id="flash" class="flash" role="status" aria-live="polite">{{.Flash}}</div>
 <main>
 {{template "content" .Data}}

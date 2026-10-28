@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"math/big"
 	"net"
@@ -251,6 +252,10 @@ func TestServeNoConfigStartsWithWarning(t *testing.T) {
 	}, ", ") + "); running with defaults"
 	if !strings.Contains(errb.String(), want) {
 		t.Errorf("stderr lacks %q:\n%s", want, errb.String())
+	}
+	// The config page shows the same warning (HTML-escaped).
+	if code, body := getBody(t, base+"/config"); code != http.StatusOK || !strings.Contains(body, html.EscapeString(want)) {
+		t.Errorf("GET /config = %d, page lacks %q:\n%s", code, want, body)
 	}
 
 	cancel()
@@ -650,6 +655,13 @@ func TestServeReadOnlyUserDirDisablesEditing(t *testing.T) {
 	}
 	if want := "editing is disabled: " + notDir + " is not writable ("; !strings.Contains(errb.String(), want) {
 		t.Errorf("stderr lacks %q:\n%s", want, errb.String())
+	}
+	// Every page explains why editing is off.
+	for _, page := range []string{"/", "/config"} {
+		_, body := getBody(t, base+page)
+		if want := "editing is disabled: " + html.EscapeString(notDir) + " is not writable ("; !strings.Contains(body, want) {
+			t.Errorf("GET %s lacks %q:\n%s", page, want, body)
+		}
 	}
 
 	cancel()

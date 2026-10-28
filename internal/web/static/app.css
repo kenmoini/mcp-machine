@@ -71,6 +71,8 @@ pre.snippet { user-select: all; }
 .ok { color: var(--ok); font-size: .9rem; }
 pre .err { color: #ff8c7a; }
 .banner { background: #fdecea; border: 1px solid #f3b7b0; border-radius: 6px; padding: .6rem 1rem; margin-bottom: 1rem; }
+.warn.banner { background: #fdf5e6; border-color: #ecd09a; color: #7a4f0e; overflow-wrap: anywhere; }
+.nav + .banner { width: calc(100% - 2rem); max-width: calc(1100px - 2rem); margin: .75rem auto 0; }
 
 @media (max-width: 720px) {
   th:nth-child(4), td:nth-child(4), th:nth-child(6), td:nth-child(6) { display: none; }

@@ -83,6 +83,7 @@ type fakeConfig struct {
 	rawErr   error
 	lastErr  error
 	reloaded bool
+	reloads  int
 	// onReload, if set, runs on Reload (the real one applies the config,
 	// which registers new servers).
 	onReload func()
@@ -102,6 +103,7 @@ func (c *fakeConfig) Current() *config.Config { return c.cfg }
 func (c *fakeConfig) LastError() error        { return c.lastErr }
 func (c *fakeConfig) Reload() error {
 	c.reloaded = true
+	c.reloads++
 	if c.onReload != nil {
 		c.onReload()
 	}
@@ -167,6 +169,8 @@ func newEnv(t *testing.T) *env {
 			{Name: "beta", Type: "remote", Remote: &config.RemoteSpec{URL: "https://x.example/mcp", Transport: "auto", Headers: map[string]string{"Authorization": "Bearer hdr-secret"}}},
 		},
 	}}
+	// Both servers are UI-owned by default, so they can be deleted.
+	cfg.origins = map[string]config.Origin{"alpha": userOrigin("alpha"), "beta": userOrigin("beta")}
 	wr := &fakeWriter{}
 	h := web.New(web.Deps{
 		Manager: mgr, Registry: reg, Config: cfg, Writer: wr,
@@ -176,6 +180,30 @@ func newEnv(t *testing.T) *env {
 		LookupEnv: func(name string) (string, bool) { return "x", !strings.HasPrefix(name, "UNSET") },
 	})
 	return &env{h: h, mgr: mgr, cfg: cfg, reg: reg, wr: wr}
+}
+
+// The files of the test origins.
+const (
+	baseFile   = "/etc/mcp-machine/config.yaml"
+	systemFile = "/etc/mcp-machine/config.d/team.yaml"
+)
+
+func userFile(name string) string { return "/data/config.d/" + name + ".yaml" }
+
+func userOrigin(name string) config.Origin {
+	return config.Origin{Files: []config.OriginFile{{Path: userFile(name), Layer: config.LayerUser}}}
+}
+
+func adminOrigin() config.Origin {
+	return config.Origin{Files: []config.OriginFile{
+		{Path: baseFile, Layer: config.LayerBase}, {Path: systemFile, Layer: config.LayerSystem},
+	}}
+}
+
+func overriddenOrigin(name string) config.Origin {
+	o := adminOrigin()
+	o.Files = append(o.Files, config.OriginFile{Path: userFile(name), Layer: config.LayerUser})
+	return o
 }
 
 func (e *env) do(method, target string, hdr ...string) *httptest.ResponseRecorder {
@@ -641,4 +669,79 @@ func TestServerPageShowsRunLine(t *testing.T) {
 	}})
 	body := e.do("GET", "/servers/gh").Body.String()
 	mustContain(t, body, "<dt>Source</dt>", "docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server")
+}
+
+func TestServerPageShowsProvenance(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.origins["alpha"] = overriddenOrigin("alpha")
+	rec := e.do("GET", "/servers/alpha")
+	if rec.Code != 200 {
+		t.Fatalf("status %d", rec.Code)
+	}
+	mustContain(t, rec.Body.String(), "<dt>Defined in</dt>",
+		`<dd class="mono">`+baseFile+" (base), "+systemFile+" (system); overridden by "+userFile("alpha")+" (user)</dd>")
+
+	// Unknown origin: no provenance row.
+	delete(e.cfg.origins, "alpha")
+	if body := e.do("GET", "/servers/alpha").Body.String(); strings.Contains(body, "<dt>Defined in</dt>") {
+		t.Error("provenance row shown for an unknown origin")
+	}
+}
+
+func TestConfigPageListsFilesAndWarning(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.files = []string{"/etc/mcp-machine/a.yaml", "/data/config.d/b.yaml"}
+	e.cfg.warning = "no configuration found (searched: x); running with defaults"
+	e.cfg.origins["alpha"] = overriddenOrigin("alpha")
+	rec := e.do("GET", "/config")
+	if rec.Code != 200 {
+		t.Fatalf("status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	mustContain(t, body, `<div class="warn banner">no configuration found (searched: x); running with defaults</div>`,
+		`<ol class="mono">`, "<th>Defined in</th>",
+		baseFile+" (base), "+systemFile+" (system); overridden by "+userFile("alpha")+" (user)",
+		userFile("beta")+" (user)")
+	if a, b := strings.Index(body, "/etc/mcp-machine/a.yaml"), strings.Index(body, "/data/config.d/b.yaml"); a < 0 || b < a {
+		t.Errorf("files out of order (a at %d, b at %d)", a, b)
+	}
+	if strings.Contains(body, "No files loaded.") {
+		t.Error("empty-files text shown with files loaded")
+	}
+
+	e.cfg.files, e.cfg.warning = nil, ""
+	body = e.do("GET", "/config").Body.String()
+	mustContain(t, body, "No files loaded.")
+	if strings.Contains(body, "warn banner") {
+		t.Error("warning banner shown without a warning")
+	}
+}
+
+func TestEditNoticeShownWhenEditingDisabled(t *testing.T) {
+	const notice = "editing is disabled: /data/config.d is not writable"
+	e := newEnv(t)
+	h := web.New(web.Deps{
+		Manager: e.mgr, Registry: e.reg, Config: e.cfg, EditNotice: notice,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	for _, path := range []string{"/", "/config", "/servers/alpha"} {
+		rec := get(path)
+		if rec.Code != 200 {
+			t.Fatalf("GET %s: status %d", path, rec.Code)
+		}
+		mustContain(t, rec.Body.String(), `<div class="warn banner">`+notice+`</div>`)
+	}
+	if rec := get("/servers/new"); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET /servers/new: status %d", rec.Code)
+	}
+	// With editing available there is no notice.
+	if body := e.do("GET", "/").Body.String(); strings.Contains(body, "warn banner") {
+		t.Error("notice shown with editing available")
+	}
 }

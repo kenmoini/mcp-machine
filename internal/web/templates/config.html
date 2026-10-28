@@ -4,6 +4,7 @@
   <form method="post" action="/config/reload"><button type="submit">Reload now</button></form>
 </div>
 {{if .LastError}}<div class="err banner">Last reload failed: {{.LastError}}</div>{{end}}
+{{if .Warning}}<div class="warn banner">{{.Warning}}</div>{{end}}
 {{with .Config}}
 <div class="card"><dl>
   <dt>Listen</dt><dd class="mono">{{.Listen}}</dd>
@@ -28,8 +29,13 @@
 <p class="empty">No configuration loaded.</p>
 {{end}}
 
+<h2>Files</h2>
+{{if .Files}}<ol class="mono">
+{{range .Files}}<li>{{.}}</li>
+{{end}}</ol>{{else}}<p class="empty">No files loaded.</p>{{end}}
+
 <h2>Servers</h2>
-{{if .Servers}}<table><thead><tr><th>Name</th><th>Type</th><th>Enabled</th></tr></thead><tbody>
-{{range .Servers}}<tr><td><a href="/servers/{{.Name}}">{{.Name}}</a></td><td>{{.Type}}</td><td>{{if .Enabled}}yes{{else}}no{{end}}</td></tr>
+{{if .Servers}}<table><thead><tr><th>Name</th><th>Type</th><th>Enabled</th><th>Defined in</th></tr></thead><tbody>
+{{range .Servers}}<tr><td><a href="/servers/{{.Name}}">{{.Name}}</a></td><td>{{.Type}}</td><td>{{if .Enabled}}yes{{else}}no{{end}}</td><td class="mono">{{if .Origin}}{{.Origin}}{{else}}-{{end}}</td></tr>
 {{end}}</tbody></table>{{else}}<p class="empty">No servers configured.</p>{{end}}
 {{end}}

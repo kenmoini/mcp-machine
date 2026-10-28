@@ -2,6 +2,7 @@ package web_test
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -187,6 +188,7 @@ func TestEditPrefillsAndKeepsVars(t *testing.T) {
 			}},
 		},
 	}
+	e.cfg.origins["x"] = userOrigin("x")
 	rec := e.do("GET", "/servers/x/edit")
 	if rec.Code != 200 {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
@@ -635,5 +637,144 @@ servers:
 				t.Errorf("edit %s prefills %s", name, a)
 			}
 		}
+	}
+}
+
+func TestEditFormDeleteVariantUser(t *testing.T) {
+	e := newEnv(t)
+	rec := e.do("GET", "/servers/alpha/edit")
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	mustContain(t, body, `action="/servers/alpha/delete"`, `hx-confirm="Delete alpha?"`, ">Delete alpha</button>",
+		"Removes "+userFile("alpha")+". Its container is stopped and removed.")
+	if strings.Contains(body, "Revert to admin definition") {
+		t.Error("revert offered for a UI-owned server")
+	}
+}
+
+func TestEditFormDeleteVariantRevert(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.origins["alpha"] = overriddenOrigin("alpha")
+	body := e.do("GET", "/servers/alpha/edit").Body.String()
+	mustContain(t, body, `action="/servers/alpha/delete"`, ">Revert to admin definition</button>",
+		"Removes "+userFile("alpha")+"; alpha goes back to the administrator&#39;s definition.")
+	if strings.Contains(body, ">Delete alpha</button>") {
+		t.Error("delete offered for an admin-defined server")
+	}
+}
+
+func TestEditFormDeleteVariantNone(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.origins["alpha"] = adminOrigin()
+	body := e.do("GET", "/servers/alpha/edit").Body.String()
+	mustContain(t, body, `<p class="muted">Defined by the administrator in `+baseFile+", "+systemFile+
+		"; it cannot be deleted here, only overridden by saving changes.</p>")
+	if strings.Contains(body, "/servers/alpha/delete") || strings.Contains(body, "Revert to admin definition") {
+		t.Error("delete form offered for an admin-only server")
+	}
+
+	// Origin unknown: nothing at all.
+	delete(e.cfg.origins, "alpha")
+	body = e.do("GET", "/servers/alpha/edit").Body.String()
+	if strings.Contains(body, "/servers/alpha/delete") || strings.Contains(body, "danger-zone") {
+		t.Error("delete section shown for an unknown origin")
+	}
+}
+
+func TestDeleteActionFor(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		o     config.Origin
+		found bool
+		want  web.DeleteAction
+	}{
+		{"user", userOrigin("alpha"), true, web.DeleteAction{Mode: "delete",
+			Note: "Removes /data/config.d/alpha.yaml. Its container is stopped and removed."}},
+		{"revert", overriddenOrigin("alpha"), true, web.DeleteAction{Mode: "revert",
+			Note: "Removes /data/config.d/alpha.yaml; alpha goes back to the administrator's definition."}},
+		{"none", adminOrigin(), true, web.DeleteAction{Mode: "none",
+			Note: "Defined by the administrator in " + baseFile + ", " + systemFile +
+				"; it cannot be deleted here, only overridden by saving changes."}},
+		{"unknown", config.Origin{}, false, web.DeleteAction{Mode: "none"}},
+	} {
+		if got := web.DeleteActionFor("alpha", tc.o, tc.found); got != tc.want {
+			t.Errorf("%s: got %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestDeleteAdminOwnedIs409(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.origins["alpha"] = adminOrigin()
+	rec := e.post("/servers/alpha/delete", nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	mustContain(t, rec.Body.String(), "cannot be deleted here")
+	if len(e.wr.Deleted) != 0 || e.cfg.reloads != 0 {
+		t.Errorf("deleted %v, reloads %d", e.wr.Deleted, e.cfg.reloads)
+	}
+
+	// An unknown origin is refused the same way.
+	delete(e.cfg.origins, "alpha")
+	if rec := e.post("/servers/alpha/delete", nil); rec.Code != http.StatusConflict {
+		t.Errorf("unknown origin: status %d", rec.Code)
+	}
+	if len(e.wr.Deleted) != 0 || e.cfg.reloads != 0 {
+		t.Errorf("deleted %v, reloads %d", e.wr.Deleted, e.cfg.reloads)
+	}
+}
+
+func TestDeleteWriterAdminErrorIs409(t *testing.T) {
+	e := newEnv(t)
+	e.wr.err = config.ErrAdminOwned
+	rec := e.post("/servers/alpha/delete", nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	mustContain(t, rec.Body.String(), "defined by the administrator", `name="command.command"`)
+	if e.cfg.reloads != 0 {
+		t.Errorf("reloads = %d", e.cfg.reloads)
+	}
+}
+
+func TestDeleteForeignFileIs409WithPath(t *testing.T) {
+	e := newEnv(t)
+	e.wr.err = fmt.Errorf("%w: /data/config.d/zzz.yaml", config.ErrForeignFile)
+	rec := e.post("/servers/alpha/delete", nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	mustContain(t, rec.Body.String(), "zzz.yaml", `name="command.command"`)
+	if e.cfg.reloads != 0 {
+		t.Errorf("reloads = %d", e.cfg.reloads)
+	}
+}
+
+func TestDeleteUserFileSucceeds(t *testing.T) {
+	for name, o := range map[string]config.Origin{"user": userOrigin("alpha"), "revert": overriddenOrigin("alpha")} {
+		e := newEnv(t)
+		e.cfg.origins["alpha"] = o
+		rec := e.post("/servers/alpha/delete", nil)
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
+			t.Fatalf("%s: status %d loc %q: %s", name, rec.Code, rec.Header().Get("Location"), rec.Body)
+		}
+		if len(e.wr.Deleted) != 1 || e.wr.Deleted[0] != "alpha" || e.cfg.reloads != 1 {
+			t.Errorf("%s: deleted %v, reloads %d", name, e.wr.Deleted, e.cfg.reloads)
+		}
+	}
+}
+
+func TestImportReloadsOnce(t *testing.T) {
+	e := newEnv(t)
+	form := hiddenFields(t, e.post("/servers/import", url.Values{"text": {twoServersJSON}}).Body.String())
+	form.Set("confirm", "1")
+	if rec := e.post("/servers/import", form); rec.Code != http.StatusSeeOther {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if len(e.wr.Added) != 2 || e.cfg.reloads != 1 {
+		t.Errorf("added %d, reloads %d", len(e.wr.Added), e.cfg.reloads)
 	}
 }

@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/kenmoini/mcp-machine/internal/config"
 )
@@ -57,6 +58,7 @@ func (u *ui) serverPage(w http.ResponseWriter, r *http.Request) {
 	}
 	if spec, ok := u.specFor(st.Name); ok {
 		sv := summarize(spec, u.Config.Current())
+		sv.Provenance = u.provenance(st.Name)
 		d.Spec = &sv
 	}
 	u.page(w, http.StatusOK, "server.html", st.Name, "", d)
@@ -68,6 +70,10 @@ type configData struct {
 	Registries []configRegistry
 	Servers    []configServer
 	LastError  string
+	// Warning is the notice about where the configuration came from.
+	Warning string
+	// Files are the files the configuration was read from, in load order.
+	Files []string
 }
 
 // configRegistry is a registry as the config page shows it: the username as
@@ -81,6 +87,17 @@ type configServer struct {
 	Name    string
 	Type    string
 	Enabled bool
+	Origin  string // where it is defined, as on the server page
+}
+
+// provenance describes where server name is defined, without the leading
+// "Defined in ", or "" when that is unknown.
+func (u *ui) provenance(name string) string {
+	o, ok := u.Config.Origin(name)
+	if !ok {
+		return ""
+	}
+	return strings.TrimPrefix(o.String(), "Defined in ")
 }
 
 func (u *ui) configPage(w http.ResponseWriter, _ *http.Request) {
@@ -90,11 +107,15 @@ func (u *ui) configPage(w http.ResponseWriter, _ *http.Request) {
 		if err := u.Config.LastError(); err != nil {
 			d.LastError = err.Error()
 		}
+		d.Warning = u.Config.Warning()
+		d.Files = u.Config.Files()
 	}
 	if d.Config != nil {
 		d.Registries = u.rawRegistries(d.Config)
 		for _, s := range d.Config.Servers {
-			d.Servers = append(d.Servers, configServer{Name: s.Name, Type: s.Type, Enabled: s.IsEnabled()})
+			d.Servers = append(d.Servers, configServer{
+				Name: s.Name, Type: s.Type, Enabled: s.IsEnabled(), Origin: u.provenance(s.Name),
+			})
 		}
 	}
 	u.page(w, http.StatusOK, "config.html", "Config", "config", d)

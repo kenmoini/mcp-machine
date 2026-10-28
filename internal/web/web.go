@@ -214,7 +214,9 @@ type layoutData struct {
 	Flash   string
 	Version string
 	CanEdit bool
-	Data    any
+	// EditNotice says why editing is disabled; shown on every page.
+	EditNotice string
+	Data       any
 }
 
 // render executes tmpl's template name with data into a buffer first, so a
@@ -234,7 +236,7 @@ func (u *ui) render(w http.ResponseWriter, status int, tmpl *template.Template, 
 // page renders a full page inside the layout.
 func (u *ui) page(w http.ResponseWriter, status int, file, title, active string, data any) {
 	u.render(w, status, u.pages[file], "layout.html",
-		layoutData{Title: title, Active: active, Version: u.Version, CanEdit: u.Writer != nil, Data: data})
+		layoutData{Title: title, Active: active, Version: u.Version, CanEdit: u.Writer != nil, EditNotice: u.EditNotice, Data: data})
 }
 
 // fragment renders partial name with data: bare for htmx requests, wrapped in
@@ -245,7 +247,7 @@ func (u *ui) fragment(w http.ResponseWriter, r *http.Request, name, title string
 		return
 	}
 	u.render(w, http.StatusOK, u.frags[name], "layout.html",
-		layoutData{Title: title, Version: u.Version, CanEdit: u.Writer != nil, Data: data})
+		layoutData{Title: title, Version: u.Version, CanEdit: u.Writer != nil, EditNotice: u.EditNotice, Data: data})
 }
 
 // known returns the registry status for the request's {name}, or writes a 404.

@@ -1,7 +1,17 @@
 {{if .Editing}}
-<form method="post" action="/servers/{{.Name}}/delete" class="danger-zone" hx-confirm="Delete {{.Name}}?">
-  <h2>Delete</h2>
-  <p class="muted">Removes {{.Name}} from the configuration file. Its container is stopped and removed.</p>
-  <button type="submit" class="danger">Delete {{.Name}}</button>
+{{- with .Delete}}
+{{- if eq .Mode "delete" "revert"}}
+<form method="post" action="/servers/{{$.Name}}/delete" class="danger-zone"
+  {{- if eq .Mode "revert"}} hx-confirm="Revert {{$.Name}} to the administrator's definition?"{{else}} hx-confirm="Delete {{$.Name}}?"{{end}}>
+  <h2>{{if eq .Mode "revert"}}Revert{{else}}Delete{{end}}</h2>
+  <p class="muted">{{.Note}}</p>
+  <button type="submit" class="danger">{{if eq .Mode "revert"}}Revert to admin definition{{else}}Delete {{$.Name}}{{end}}</button>
 </form>
+{{- else if .Note}}
+<div class="danger-zone">
+  <h2>Delete</h2>
+  <p class="muted">{{.Note}}</p>
+</div>
+{{- end}}
+{{- end}}
 {{end}}

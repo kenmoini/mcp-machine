@@ -75,6 +75,9 @@ type specView struct {
 	Enabled bool
 	Source  string
 	Serve   string
+	// Provenance is where the server is defined: Origin.String() without
+	// its leading "Defined in ", or "" when the origin is unknown.
+	Provenance string
 }
 
 func summarize(s config.ServerSpec, cfg *config.Config) specView {

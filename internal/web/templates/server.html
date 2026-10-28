@@ -28,6 +28,7 @@
   <dt>Enabled</dt><dd>{{if .Enabled}}yes{{else}}no{{end}}</dd>
   {{if .Source}}<dt>Source</dt><dd class="mono">{{.Source}}</dd>{{end}}
   {{if .Serve}}<dt>Serve</dt><dd class="mono">{{.Serve}}</dd>{{end}}
+  {{if .Provenance}}<dt>Defined in</dt><dd class="mono">{{.Provenance}}</dd>{{end}}
 </dl></div>
 {{end}}
 

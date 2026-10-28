@@ -26,6 +26,48 @@ type formData struct {
 	Action  string
 	Values  url.Values
 	Errors  []string
+	Delete  deleteAction // the edit form's delete section
+}
+
+// deleteAction is what the edit form offers to remove a server, which
+// depends on the layers that define it.
+type deleteAction struct {
+	Mode string // "delete", "revert", or "none"
+	Note string // shown under the button, or the reason when Mode is "none"
+}
+
+// deleteActionFor returns the delete action for server name defined by o;
+// found is false when the origin is unknown. A server only the UI defines
+// is deleted; an admin-defined one with a UI override reverts to the admin
+// definition; an admin-only one cannot be deleted.
+func deleteActionFor(name string, o config.Origin, found bool) deleteAction {
+	if !found {
+		return deleteAction{Mode: "none"}
+	}
+	user := o.UserFile()
+	switch {
+	case user != "" && !o.Admin():
+		return deleteAction{Mode: "delete", Note: "Removes " + user + ". Its container is stopped and removed."}
+	case user != "":
+		return deleteAction{Mode: "revert", Note: "Removes " + user + "; " + name + " goes back to the administrator's definition."}
+	}
+	var admin []string
+	for _, f := range o.Files {
+		if f.Layer != config.LayerUser {
+			admin = append(admin, f.Path)
+		}
+	}
+	if len(admin) == 0 {
+		return deleteAction{Mode: "none"}
+	}
+	return deleteAction{Mode: "none", Note: "Defined by the administrator in " + strings.Join(admin, ", ") +
+		"; it cannot be deleted here, only overridden by saving changes."}
+}
+
+// deleteActionOf returns the delete action for the configured server name.
+func (u *ui) deleteActionOf(name string) deleteAction {
+	o, found := u.Config.Origin(name)
+	return deleteActionFor(name, o, found)
 }
 
 // V returns the trimmed-for-display value of form field k.
@@ -459,10 +501,11 @@ func (u *ui) editTarget(w http.ResponseWriter, r *http.Request) (config.ServerSp
 	return config.ServerSpec{}, false
 }
 
-func editData(spec config.ServerSpec, vals url.Values) formData {
+func (u *ui) editData(spec config.ServerSpec, vals url.Values) formData {
 	return formData{
 		Type: spec.Type, Name: spec.Name, Editing: true,
 		Action: "/servers/" + spec.Name + "/edit", Values: vals,
+		Delete: u.deleteActionOf(spec.Name),
 	}
 }
 
@@ -474,7 +517,7 @@ func (u *ui) editForm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	u.formPage(w, http.StatusOK, editData(spec, formFromSpec(stripDefaults(spec))))
+	u.formPage(w, http.StatusOK, u.editData(spec, formFromSpec(stripDefaults(spec))))
 }
 
 func (u *ui) updateServer(w http.ResponseWriter, r *http.Request) {
@@ -489,7 +532,7 @@ func (u *ui) updateServer(w http.ResponseWriter, r *http.Request) {
 	posted := maps.Clone(r.PostForm)
 	posted.Set("name", cur.Name)
 	posted.Set("type", cur.Type)
-	d := editData(cur, posted)
+	d := u.editData(cur, posted)
 
 	spec, err := specFromForm(posted)
 	if err != nil {
@@ -526,11 +569,25 @@ func (u *ui) deleteServer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The form offers no delete for an admin-only server; refuse a posted one
+	// before the writer is involved.
+	if act := u.deleteActionOf(cur.Name); act.Mode == "none" {
+		msg := act.Note
+		if msg == "" {
+			msg = cur.Name + " is not defined in a file the UI knows; it cannot be deleted here."
+		}
+		http.Error(w, msg, http.StatusConflict)
+		return
+	}
 	if err := u.Writer.DeleteServer(cur.Name); err != nil {
 		u.Logger.Warn("delete server", "server", cur.Name, "err", err)
-		d := editData(cur, formFromSpec(stripDefaults(cur)))
+		status := http.StatusInternalServerError
+		if errors.Is(err, config.ErrAdminOwned) || errors.Is(err, config.ErrForeignFile) {
+			status = http.StatusConflict
+		}
+		d := u.editData(cur, formFromSpec(stripDefaults(cur)))
 		d.Errors = []string{err.Error()}
-		u.formPage(w, http.StatusInternalServerError, d)
+		u.formPage(w, status, d)
 		return
 	}
 	u.reloadAfterWrite()
