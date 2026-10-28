@@ -27,14 +27,12 @@ GOVULNCHECK_VERSION   ?= v1.9.0
 GOBIN_DIR := $(or $(shell go env GOBIN),$(firstword $(subst :, ,$(shell go env GOPATH)))/bin)
 export PATH := $(GOBIN_DIR):$(PATH)
 
-# The go.mod toolchain line (go1.27.3) is honoured when GOTOOLCHAIN is "auto",
-# which is also what an unset variable falls back to via $GOROOT/go.env. Some
-# shells export it empty, which pins the local toolchain; only in that case
-# restore "auto" so builds, tests and govulncheck use the patched toolchain.
-ifeq ($(origin GOTOOLCHAIN),environment)
+# The go.mod toolchain line (go1.27.3) is honoured only when GOTOOLCHAIN is
+# "auto". Some Go installations default it to "local" (pinning whatever `go`
+# is on PATH, including unpatched toolchains), so set it to "auto" unless the
+# caller provides a value. Opt out with: make GOTOOLCHAIN=local <target>.
 ifeq ($(GOTOOLCHAIN),)
 export GOTOOLCHAIN := auto
-endif
 endif
 
 .PHONY: build test test-race test-integration vet lint fmt fmt-check vuln cover check tools run validate image push \
