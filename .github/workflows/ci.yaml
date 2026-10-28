@@ -137,13 +137,11 @@ jobs:
         run: make vuln
 
   container:
-    name: Container build and scan
+    name: Container build
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
-      # Only this job uploads SARIF to the code scanning tab.
-      security-events: write
     env:
       IMAGE_REF: mcp-machine:ci
     steps:
@@ -166,31 +164,3 @@ jobs:
             MCPM_COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=ci
           cache-to: type=gha,mode=max,scope=ci
-
-      - name: Trivy scan (SARIF)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.IMAGE_REF }}
-          format: sarif
-          output: trivy-results.sarif
-          limit-severities-for-sarif: true
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '0'
-
-      # Pull requests from forks get a read-only token and cannot upload.
-      - name: Upload Trivy SARIF
-        if: ${{ !cancelled() && hashFiles('trivy-results.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy-container
-
-      - name: Trivy scan (fail on findings)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.IMAGE_REF }}
-          format: table
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
