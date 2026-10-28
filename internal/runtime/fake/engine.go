@@ -13,13 +13,31 @@ import (
 	"github.com/kenmoini/mcp-machine/internal/runtime"
 )
 
+// exitState is one run's exit signal. code is written before done is closed
+// and never changes afterwards, so waiters can read it without the mutex.
+type exitState struct {
+	done chan struct{}
+	code int
+}
+
+func newExitState() *exitState { return &exitState{done: make(chan struct{})} }
+
+func (x *exitState) isDone() bool {
+	select {
+	case <-x.done:
+		return true
+	default:
+		return false
+	}
+}
+
 type container struct {
-	info   runtime.ContainerInfo
-	spec   runtime.ContainerSpec
-	logs   []runtime.LogLine
-	exited chan struct{} // closed when the container exits
-	local  net.Conn      // end handed out by Attach
-	peer   net.Conn      // far end, retrievable via Peer
+	info  runtime.ContainerInfo
+	spec  runtime.ContainerSpec
+	logs  []runtime.LogLine
+	exit  *exitState // replaced on restart
+	local net.Conn   // end handed out by Attach
+	peer  net.Conn   // far end, retrievable via Peer
 }
 
 // Engine is an in-memory runtime.Engine. All state is guarded by one mutex.
@@ -73,19 +91,21 @@ func (e *Engine) find(idOrName string) (*container, bool) {
 	return nil, false
 }
 
-// markExited transitions c to exited, closes the attach pipe and wakes
-// waiters. Callers hold e.mu.
+// markExited transitions c to exited, closes and clears the attach pipe (so
+// a fresh Attach can create a new one) and wakes waiters with code. It is a
+// no-op if c already exited. Callers hold e.mu.
 func (e *Engine) markExited(c *container, code int) {
+	if c.exit.isDone() {
+		return
+	}
 	c.info.State = "exited"
 	c.info.ExitCode = code
 	if c.local != nil {
 		_ = c.local.Close()
 	}
-	select {
-	case <-c.exited:
-	default:
-		close(c.exited)
-	}
+	c.local, c.peer = nil, nil
+	c.exit.code = code
+	close(c.exit.done)
 }
 
 // Ping returns nil unless a failure was queued with FailNext("Ping", err).
@@ -126,12 +146,14 @@ func (e *Engine) ImageExists(_ context.Context, ref string) (bool, error) {
 
 func (e *Engine) PullImage(_ context.Context, ref string, _ *runtime.RegistryAuth, progress io.Writer) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if err := e.begin("PullImage"); err != nil {
+		e.mu.Unlock()
 		return err
 	}
 	e.pulls = append(e.pulls, ref)
 	e.images[ref] = true
+	e.mu.Unlock()
+	// Write outside the lock: the writer may block or call back into e.
 	if progress != nil {
 		_, _ = fmt.Fprintf(progress, "pulled %s\n", ref)
 	}
@@ -175,7 +197,7 @@ func (e *Engine) CreateContainer(_ context.Context, spec runtime.ContainerSpec) 
 			Labels: copyLabels(spec.Labels),
 			Ports:  append([]runtime.PortMapping(nil), spec.Ports...),
 		},
-		exited: make(chan struct{}),
+		exit: newExitState(),
 	}
 	e.order = append(e.order, id)
 	return id, nil
@@ -191,11 +213,9 @@ func (e *Engine) StartContainer(_ context.Context, id string) error {
 	if !ok {
 		return runtime.ErrNotFound
 	}
-	select {
-	case <-c.exited: // restarting an exited container
-		c.exited = make(chan struct{})
+	if c.exit.isDone() { // restarting an exited container
+		c.exit = newExitState()
 		c.info.ExitCode = 0
-	default:
 	}
 	c.info.State = "running"
 	return nil
@@ -297,7 +317,8 @@ func (e *Engine) Logs(_ context.Context, id string, tail int) ([]runtime.LogLine
 	return append([]runtime.LogLine(nil), lines...), nil
 }
 
-// Attach must be called on a created or running container. It hands out one
+// Attach must be called on a created, running or exited (about to be
+// restarted) container. It hands out one
 // end of a net.Pipe; the other end is available via Peer.
 func (e *Engine) Attach(_ context.Context, id string) (io.ReadWriteCloser, error) {
 	e.mu.Lock()
@@ -309,7 +330,7 @@ func (e *Engine) Attach(_ context.Context, id string) (io.ReadWriteCloser, error
 	if !ok {
 		return nil, runtime.ErrNotFound
 	}
-	if c.info.State != "created" && c.info.State != "running" {
+	if c.info.State != "created" && c.info.State != "running" && c.info.State != "exited" {
 		return nil, fmt.Errorf("runtime: cannot attach to %s container", c.info.State)
 	}
 	if c.local != nil {
@@ -332,14 +353,12 @@ func (e *Engine) Wait(ctx context.Context, id string) (int, error) {
 		e.mu.Unlock()
 		return 0, runtime.ErrNotFound
 	}
-	exited := c.exited
+	exit := c.exit
 	e.mu.Unlock()
 
 	select {
-	case <-exited:
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		return c.info.ExitCode, nil
+	case <-exit.done:
+		return exit.code, nil
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
@@ -385,9 +404,10 @@ func (e *Engine) Seed(info runtime.ContainerInfo) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	info = cloneInfo(info)
-	c := &container{info: info, exited: make(chan struct{})}
+	c := &container{info: info, exit: newExitState()}
 	if info.State == "exited" {
-		close(c.exited)
+		c.exit.code = info.ExitCode
+		close(c.exit.done)
 	}
 	e.containers[info.ID] = c
 	e.order = append(e.order, info.ID)

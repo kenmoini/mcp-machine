@@ -149,13 +149,120 @@ func TestFakeAttachErrors(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 	id, _ := e.CreateContainer(ctx, runtime.ContainerSpec{Name: "a"})
+	if _, ok := e.Peer(id); ok {
+		t.Fatal("Peer should not exist before Attach")
+	}
 	_ = e.StartContainer(ctx, id)
 	_ = e.StopContainer(ctx, id, time.Second)
-	if _, err := e.Attach(ctx, id); err == nil {
-		t.Fatal("Attach on exited container should fail")
-	}
 	if _, ok := e.Peer(id); ok {
 		t.Fatal("Peer should not exist")
+	}
+}
+
+func TestFakeReattachAfterStop(t *testing.T) {
+	ctx := context.Background()
+	e := fake.New()
+	id, _ := e.CreateContainer(ctx, runtime.ContainerSpec{Name: "a", Stdin: true})
+	if _, err := e.Attach(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	oldPeer, _ := e.Peer(id)
+	if err := e.StartContainer(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.StopContainer(ctx, id, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.Peer(id); ok {
+		t.Fatal("Peer should be gone after stop")
+	}
+	buf := make([]byte, 4)
+	if _, err := oldPeer.Read(buf); !errors.Is(err, io.EOF) {
+		t.Fatalf("old peer err = %v, want EOF", err)
+	}
+	conn, err := e.Attach(ctx, id)
+	if err != nil {
+		t.Fatalf("re-Attach: %v", err)
+	}
+	if err := e.StartContainer(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	peer, ok := e.Peer(id)
+	if !ok {
+		t.Fatal("Peer missing after re-Attach")
+	}
+	go func() { _, _ = peer.Write([]byte("ping")) }()
+	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("read = %q, %v", buf, err)
+	}
+	go func() { _, _ = conn.Write([]byte("pong")) }()
+	if _, err := io.ReadFull(peer, buf); err != nil || string(buf) != "pong" {
+		t.Fatalf("read = %q, %v", buf, err)
+	}
+
+	// Exit also clears the pipe for the next Attach.
+	e.Exit(id, 1)
+	if _, ok := e.Peer(id); ok {
+		t.Fatal("Peer should be gone after Exit")
+	}
+	if _, err := e.Attach(ctx, id); err != nil {
+		t.Fatalf("Attach after Exit: %v", err)
+	}
+}
+
+func TestFakePullProgressDoesNotHoldLock(t *testing.T) {
+	ctx := context.Background()
+	e := fake.New()
+	pr, pw := io.Pipe()
+	got := make(chan []string, 1)
+	go func() {
+		// PullImage is blocked in pw.Write until we read; calling Calls()
+		// before draining would deadlock if the lock were still held.
+		time.Sleep(50 * time.Millisecond)
+		got <- e.Calls()
+		_, _ = io.Copy(io.Discard, pr)
+	}()
+	done := make(chan error, 1)
+	go func() { done <- e.PullImage(ctx, "r/i:1", nil, pw); _ = pw.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("PullImage deadlocked")
+	}
+	select {
+	case <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Calls deadlocked")
+	}
+}
+
+func TestFakeWaitReturnsCodeAtExit(t *testing.T) {
+	ctx := context.Background()
+	e := fake.New()
+	id, _ := e.CreateContainer(ctx, runtime.ContainerSpec{Name: "a"})
+	_ = e.StartContainer(ctx, id)
+	ch := make(chan int, 1)
+	go func() { c, _ := e.Wait(ctx, id); ch <- c }()
+	time.Sleep(20 * time.Millisecond)
+	e.Exit(id, 3)
+	e.Exit(id, 9) // already exited: no-op
+	if c := <-ch; c != 3 {
+		t.Fatalf("waiter code = %d, want 3", c)
+	}
+	info, _ := e.InspectContainer(ctx, id)
+	if info.ExitCode != 3 {
+		t.Fatalf("ExitCode = %d, want 3", info.ExitCode)
+	}
+	// Restart then exit with another code; a Wait on the new run sees it.
+	_ = e.StartContainer(ctx, id)
+	go func() { c, _ := e.Wait(ctx, id); ch <- c }()
+	time.Sleep(20 * time.Millisecond)
+	e.Exit(id, 5)
+	if c := <-ch; c != 5 {
+		t.Fatalf("second run code = %d, want 5", c)
 	}
 }
 
