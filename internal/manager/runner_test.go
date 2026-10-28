@@ -30,12 +30,23 @@ type stubResolver struct {
 	res   sources.Resolved
 	err   error
 	calls int
+	// hook, when set, runs on every Resolve with the 1-based call number,
+	// outside the lock, and may block on ctx or return an error.
+	hook func(ctx context.Context, n int) error
 }
 
-func (s *stubResolver) Resolve(_ context.Context, _ *config.Config, spec config.ServerSpec) (sources.Resolved, error) {
+func (s *stubResolver) Resolve(ctx context.Context, _ *config.Config, spec config.ServerSpec) (sources.Resolved, error) {
+	s.mu.Lock()
+	s.calls++
+	n, hook := s.calls, s.hook
+	s.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx, n); err != nil {
+			return sources.Resolved{}, err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.calls++
 	if s.err != nil {
 		return sources.Resolved{}, s.err
 	}
