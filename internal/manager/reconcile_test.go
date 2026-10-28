@@ -376,6 +376,8 @@ func TestAdoptRetriesAfterListFailure(t *testing.T) {
 	h.eng.FailNext("ListContainers", errors.New("socket not ready"))
 	if err := h.m.Apply(context.Background(), h.cfg); err == nil || !strings.Contains(err.Error(), "socket not ready") {
 		t.Fatalf("first Apply err = %v, want the list failure", err)
+	} else if !errors.Is(err, manager.ErrAdoptionScan) {
+		t.Fatalf("first Apply err = %v, want errors.Is ErrAdoptionScan", err)
 	}
 	if _, ok := h.m.Facade("a"); ok {
 		t.Error("a runner was started although the containers could not be listed")

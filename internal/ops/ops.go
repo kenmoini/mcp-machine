@@ -85,7 +85,7 @@ func render(m Metrics) string {
 		fmt.Fprintf(&b, "mcp_machine_proxy_calls_total{server=\"%s\"} %d\n", escapeLabel(n), m.ProxyCalls[n])
 	}
 
-	b.WriteString("# HELP mcp_machine_config_reloads_total Configuration reloads attempted.\n")
+	b.WriteString("# HELP mcp_machine_config_reloads_total Successful configuration reloads.\n")
 	b.WriteString("# TYPE mcp_machine_config_reloads_total counter\n")
 	fmt.Fprintf(&b, "mcp_machine_config_reloads_total %d\n", m.ConfigReloads)
 

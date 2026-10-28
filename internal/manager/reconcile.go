@@ -93,7 +93,7 @@ func (m *Manager) Apply(ctx context.Context, cfg *config.Config) error {
 	var adopted map[string]runtime.ContainerInfo
 	if !m.adopted {
 		listed, err := m.adopt(ctx, cfg, desired, owned)
-		if errors.Is(err, errListContainers) {
+		if errors.Is(err, ErrAdoptionScan) {
 			// Starting servers now could destroy containers that the next
 			// scan would adopt: start nothing, and scan again next time.
 			return err
@@ -224,9 +224,11 @@ func (m *Manager) spawn(cfg *config.Config, spec config.ServerSpec, adopt *runti
 	return nil
 }
 
-// errListContainers marks adopt's failure to list containers: the scan did
-// not happen and must be retried.
-var errListContainers = errors.New("manager: list containers")
+// ErrAdoptionScan is wrapped by the error Apply returns when the managed
+// containers cannot be listed: the adoption scan did not happen, nothing was
+// started, and Apply must be retried. Any other error from Apply means the
+// configuration was applied and describes per-server failures.
+var ErrAdoptionScan = errors.New("manager: adoption scan failed")
 
 // adopt lists the managed containers left by a previous process. Containers
 // of servers in owned (which already have a runner, from an Apply whose scan
@@ -240,7 +242,7 @@ var errListContainers = errors.New("manager: list containers")
 func (m *Manager) adopt(ctx context.Context, cfg *config.Config, desired map[string]string, owned map[string]bool) (map[string]runtime.ContainerInfo, error) {
 	list, err := m.engine.ListContainers(ctx, map[string]string{store.LabelManaged: "true"})
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errListContainers, err)
+		return nil, fmt.Errorf("%w: %w", ErrAdoptionScan, err)
 	}
 	timeout := cfg.Podman.StopTimeout
 	adopted := map[string]runtime.ContainerInfo{}
