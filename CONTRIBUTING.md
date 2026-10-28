@@ -29,7 +29,7 @@ This puts `golangci-lint` (pinned to the version CI uses) and `govulncheck` in `
 | `make fmt` / `make fmt-check` | Format with `gofmt` / fail if anything needs formatting. |
 | `make vuln` | Run `govulncheck` against reachable code. |
 | `make cover` | Write `coverage.out` and `coverage.html` and print the total. |
-| `make check` | `fmt-check`, `lint`, `vuln`, and `test`. Run this before you open a pull request. |
+| `make check` (and `make scan` to run the same image scan CI runs, via Grype) | `fmt-check`, `lint`, `vuln`, and `test`. Run this before you open a pull request. |
 | `make tools` | Install `golangci-lint` and `govulncheck`. |
 
 All targets pass the build tags in `GOTAGS` (`remote,containers_image_openpgp,exclude_graphdriver_btrfs,exclude_graphdriver_devicemapper`). If you call `go` directly, pass `-tags` with the same value.

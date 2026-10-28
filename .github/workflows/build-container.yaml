@@ -176,3 +176,50 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+
+  # Scan the image that was just pushed. Findings go to the code scanning tab
+  # (SARIF); fixable HIGH/CRITICAL findings fail the job.
+  scan:
+    name: Scan Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    needs:
+      - merge
+    steps:
+      - name: Login to Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: "${{ env.REGISTRY }}"
+          username: "${{ github.actor }}"
+          password: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Grype scan (SARIF)
+        id: grype-sarif
+        uses: anchore/scan-action@v7.4.2
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          output-format: sarif
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: false
+          cache-db: true
+
+      - name: Upload Grype SARIF
+        if: ${{ !cancelled() && steps.grype-sarif.outputs.sarif != '' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.grype-sarif.outputs.sarif }}
+          category: grype-image
+
+      - name: Grype scan (fail on fixable HIGH/CRITICAL)
+        uses: anchore/scan-action@v7.4.2
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          output-format: table
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: true
+          cache-db: true

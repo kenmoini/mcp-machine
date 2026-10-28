@@ -35,7 +35,7 @@ ifeq ($(GOTOOLCHAIN),)
 export GOTOOLCHAIN := auto
 endif
 
-.PHONY: build test test-race test-integration vet lint fmt fmt-check vuln cover check tools run validate image push \
+.PHONY: scan build test test-race test-integration vet lint fmt fmt-check vuln cover check tools run validate image push \
 	compose-up compose-down quadlet-install htmx-vendor clean
 
 build:
@@ -114,3 +114,9 @@ htmx-vendor:
 
 clean:
 	rm -rf bin coverage.out coverage.html
+
+# Scan the locally built image with Grype (brew install grype); fails on
+# fixable HIGH/CRITICAL findings, matching the CI gate.
+scan: image
+	@command -v grype >/dev/null 2>&1 || { echo "grype not found on PATH; install it with 'brew install grype' or see https://github.com/anchore/grype" >&2; exit 1; }
+	grype $(IMAGE):$(TAG) --only-fixed --fail-on high -o table

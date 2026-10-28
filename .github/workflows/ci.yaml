@@ -137,11 +137,13 @@ jobs:
         run: make vuln
 
   container:
-    name: Container build
+    name: Container build and scan
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
+      # Only this job uploads SARIF to the code scanning tab.
+      security-events: write
     env:
       IMAGE_REF: mcp-machine:ci
     steps:
@@ -164,3 +166,32 @@ jobs:
             MCPM_COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=ci
           cache-to: type=gha,mode=max,scope=ci
+
+      - name: Grype scan (SARIF)
+        id: grype-sarif
+        uses: anchore/scan-action@v7.4.2
+        with:
+          image: ${{ env.IMAGE_REF }}
+          output-format: sarif
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: false
+          cache-db: true
+
+      # Pull requests from forks get a read-only token and cannot upload.
+      - name: Upload Grype SARIF
+        if: ${{ !cancelled() && steps.grype-sarif.outputs.sarif != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.grype-sarif.outputs.sarif }}
+          category: grype-container
+
+      - name: Grype scan (fail on fixable HIGH/CRITICAL)
+        uses: anchore/scan-action@v7.4.2
+        with:
+          image: ${{ env.IMAGE_REF }}
+          output-format: table
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: true
+          cache-db: true
