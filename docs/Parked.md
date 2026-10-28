@@ -19,6 +19,30 @@ Known gaps and improvements deferred past v1. Each entry names where the behavio
 - Symptom: the variable must be set or the config fails to load, yet the image reference or `-v` path still reaches Podman as literal `${VAR}` text.
 - Fix: either expand those positions in the resolver as well or exclude them from the load-time check and document that only env values and args are expanded.
 
+## Layered configuration residuals (2026-10-28)
+
+### A refused revert answers 500, not 409 or 422
+- Where: `internal/web/forms.go` (`deleteServer`), `internal/config/dirwriter.go` (`DeleteServer` validation).
+- Symptom: reverting an override that would leave an invalid set (for example an unset `${VAR}` in the admin definition) correctly refuses and re-renders the form, but with status 500 although it is a user-actionable refusal. The message also doubles the `config:` prefix and, with several unset variables, breaks the sentence across lines.
+- Fix: map the validation refusal to 409 like the other refusals; strip the inner `config:` prefix when wrapping.
+
+### A retrying first apply can use a stale set
+- Where: `internal/cli/serve.go` (`applyUntilSuccess` reads `state.currentSet()` outside `applyMu`; the watcher calls `state.loaded` before `applyOnce`).
+- Symptom: after an adoption-scan failure at startup, a retry can apply a set that a newer reload has already superseded; two overlapping reloads (UI reload plus the watcher) can apply out of order. Narrow window, self-correcting at the next event.
+- Fix: read the set inside `applyMu`, or serialize load+apply behind one lock (see "Concurrent UI writes" above).
+
+### Delete is offered for a canonical file that holds several servers
+- Where: `internal/web/forms.go` (`deleteActionFor`).
+- Symptom: when `/data/config.d/<name>.yaml` is the effective file but defines more than one server, the UI offers Delete or Revert and the writer refuses with 409. Hand-placed files are the only way to reach this.
+- Fix: have the config view expose whether the canonical file is exclusive, or read it in the handler, and show the "not managed by the UI" note instead.
+
+### Small test and polish items from the per-task reviews
+- Watcher: prove a late-created drop-in directory gets its own watch (write a second file after the first reload); test the dot-prefix branch; re-run pending resolution after a resolve so nested `MkdirAll` directories are not stranded; report non-ENOENT `Add` errors through `onError`; add a timeout to the import-burst test.
+- DirWriter: check `NameRE` before stat-ing `path(name)`; wrap `ErrAdminOwned` with the name; tests for update-replaces-existing, failed validation leaving the file untouched, and update of a foreign-only server.
+- Serve: `prepareUserDir` "exists but unwritable" branch untested (chmod 0500 subtest); directory is created before validation, so an invalid config still leaves `/data/config.d` behind.
+- Web: plain-text 409 for a hand-made POST swaps into the page under hx-boost (render through the form instead); revert redirects to `/` rather than the server page; `Origin.AdminFiles()` would remove a duplicated loop.
+- Config: `TestLoadFileWrapperUnchanged` is tautological; `Set.Searched` aliases `Layout.Searched`; the admin type-mismatch error bypasses the `fileError` helper.
+
 ## Lifecycle and manager
 
 ### Remove action semantics
