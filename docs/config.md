@@ -18,7 +18,7 @@ Check the configuration without starting anything:
 
 ```sh
 mcp-machine validate -c /etc/mcp-machine -v   # prints "ok" or the problems found; -v also lists the files and where each server is defined
-mcp-machine validate -c config.yaml           # a single base file
+mcp-machine validate -c config.yaml           # a single base file (the user drop-ins in /data/config.d are still read)
 ```
 
 ## Top-level keys
@@ -295,9 +295,12 @@ servers:
 The server that runs has the base file's command and arguments and the
 drop-in's volume list.
 
-There is no way to blank a value from a later layer: an empty string, a zero,
-or a missing key keeps what an earlier file set. To remove a field, edit the
-file that sets it, or override the server from the user layer.
+There is no way to blank a string or number from a later layer, or to remove
+a map key: an empty string, a zero, or a missing key keeps what an earlier
+file set (a map key can only be given another value, such as `""`). A list is
+different: an explicit empty list (`args: []`, `volumes: []`) replaces, and so
+clears, the earlier one. To remove anything else, edit the file that sets it,
+or override the server from the user layer.
 
 A user drop-in (`/data/config.d`) does not merge: its definition replaces the
 administrator's definition of that name entirely. What the UI saved is exactly
@@ -389,7 +392,8 @@ its servers). On a host that mounts `/srv/mcp-machine` at `/data`:
 When no configuration file is found at all, `serve` starts with defaults and no
 servers, logs `no configuration found (searched: PATHS); running with
 defaults`, and shows the same warning on the Config page. That also applies to
-`serve -c FILE` when `FILE` does not exist. Labeled containers of servers MCP
+`serve -c FILE` when `FILE` ends in `.yaml` or `.yml` and does not exist (a
+missing path without that extension is taken as an admin root directory). Labeled containers of servers MCP
 Machine does not know are then left running instead of being removed, so a
 forgotten mount does not delete running servers. That protects a start
 without configuration; removing every file while MCP Machine runs stops their
@@ -406,10 +410,14 @@ directory (an editor save, a rename, or a UI write) is debounced for about
 250 ms, then every layer is loaded and validated together. Names starting with
 `.`, which include the UI's temp files, are ignored. If the result is valid it
 is applied: servers are added, replaced when their spec hash changed, or
-removed (see [state-machine.md](state-machine.md)). If any file is unreadable
-or invalid the whole reload is rejected, the previous configuration stays in
-effect, and the error, naming the file, appears on the Config page and in the
-log. The Config page also has a Reload now button (`POST /config/reload`).
+removed (see [state-machine.md](state-machine.md)). If anything is wrong the
+whole reload is rejected, the previous configuration stays in effect, and the
+error appears on the Config page and in the log. A file that cannot be read or
+parsed, an empty file, a global key in a drop-in, a name defined twice in one
+file, and a `type` mismatch between administrator files are reported with the
+file's path. A validation problem is found on the merged result, so it names
+the server instead (its **Defined in** on the Config page tells you which
+files define it), and an unset `${VAR}` names the variable. The Config page also has a Reload now button (`POST /config/reload`).
 
 Each location must be a **directory** that is bind-mounted: `/etc/mcp-machine`
 and `/data`. A bind mount of a single file, or a named volume, does not deliver

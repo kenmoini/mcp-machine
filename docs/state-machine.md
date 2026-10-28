@@ -68,8 +68,14 @@ Resync re-reads the backend's tool, resource, and prompt lists into the proxy wi
 container; other types answer with an error. Remove (UI action) stops and
 removes the container and drops the runner. If the entry is still in the config,
 the server comes back the next time the configuration is applied. Deleting a
-server through the UI removes the entry from the file, and the reload removes
-the container.
+server through the UI depends on where it is defined (see
+[config.md](config.md#delete-revert-and-administrator-servers)): for a server
+defined only by `/data/config.d/<name>.yaml` the file is removed, and the
+reload removes the runner and the container; for an administrator's server
+with a UI override, the override file is removed and the server reverts to the
+administrator's definition, so the reload replaces its container if the spec
+hash changes rather than removing it. A server defined only in the
+administrator's files cannot be deleted from the UI.
 
 ## Reconcile
 
@@ -79,7 +85,8 @@ name to **spec hash**, then:
 
 - creates a runner for a server that has none;
 - replaces the runner (container included) of a server whose hash changed;
-- removes the runner and container of a server that is no longer in the file;
+- removes the runner and container of a server that is no longer in any
+  configuration file;
 - stops a server that became `enabled: false`, and starts one that became
   enabled again;
 - leaves everything else alone, including paused servers.

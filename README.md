@@ -137,7 +137,7 @@ To block DNS-rebinding attacks from web pages, MCP Machine only answers browser 
 - **Add, edit, delete, import**: forms for each server type write the server to its own file, `/data/config.d/<name>.yaml`, and apply it at once. Editing a server from the administrator's files writes an override there; such a server can be reverted to the administrator's definition but not deleted. **Import** takes pasted `mcpServers` client JSON or a `docker run` line, shows a preview, and adds the servers; a client entry whose command is `docker run ...` or `podman run ...` becomes a `command.run` line. If `/data/config.d` is not writable, editing is disabled and every page says so.
 - **Config** (`/config`): the loaded settings, the files loaded and where each server is defined, the last reload error if any, and a Reload now button.
 
-`mcp-machine import <file|->` prints the same client-JSON conversion as YAML on the command line, and `mcp-machine validate -c /etc/mcp-machine -v` checks the configuration and lists the files read and where each server is defined. `mcp-machine help` (or `-h`, `--help`) lists the commands.
+`mcp-machine import <file|->` prints the same client-JSON conversion as YAML on the command line, and `sudo podman exec mcp-machine /usr/local/bin/mcp-machine validate -c /etc/mcp-machine -v` checks the configuration the running container sees and lists the files read and where each server is defined (on the host, with the binary, add `--config-d /srv/mcp-machine/config.d`, since the default `/data/config.d` is the path inside the container). `mcp-machine help` (or `-h`, `--help`) lists the commands.
 
 ## Configuration
 

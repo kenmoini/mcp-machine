@@ -133,9 +133,12 @@ administrator's files.
 
 The watcher watches the base file's directory and both drop-in directories
 (not the files), so editor renames and the UI's atomic writes trigger a reload.
-A reload in which any file fails to read, parse, or validate keeps the last
-good configuration and records the error, naming the file, which the Config
-page shows. Each successful reload is handed to the manager, which reconciles
+A reload in which any file fails to read or parse, or the merged result fails
+to validate, keeps the last good configuration and records the error, which
+the Config page shows. File-level problems (read, parse, empty file, a global
+key in a drop-in, a duplicate name in one file, an admin `type` mismatch)
+name the file; validation problems name the server and an unset `${VAR}` the
+variable, since they are found on the merged set. Each successful reload is handed to the manager, which reconciles
 by name and spec hash. The UI reloads right after writing so the change is
 applied before the browser is redirected; see [config.md](config.md).
 
