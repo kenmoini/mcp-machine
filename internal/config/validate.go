@@ -52,14 +52,14 @@ func Validate(c *Config) error {
 			add("duplicate server name %q", s.Name)
 		}
 		seen[s.Name] = true
-		errs = append(errs, validateServer(s)...)
+		errs = append(errs, validateServer(s, c.Runtimes)...)
 	}
 
 	return errors.Join(errs...)
 }
 
 // validateServer returns the problems found in one server entry.
-func validateServer(s *ServerSpec) []error {
+func validateServer(s *ServerSpec, runtimes map[string]string) []error {
 	var errs []error
 	add := func(format string, args ...any) {
 		errs = append(errs, fmt.Errorf("server %q: %s", s.Name, fmt.Sprintf(format, args...)))
@@ -105,7 +105,14 @@ func validateServer(s *ServerSpec) []error {
 			add("command.command and command.run are mutually exclusive")
 		case s.Command.Command == "" && s.Command.Run == "":
 			add("one of command.command or command.run is required")
+		case s.Command.Command != "":
+			if _, ok := runtimes[s.Command.Command]; !ok {
+				add("command.command %q is not a configured runtime", s.Command.Command)
+			}
 		}
+	}
+	if s.Build != nil && s.Build.Auth != nil && s.Build.Auth.KnownHostsFile != "" && s.Build.Auth.SSHKeyFile == "" {
+		add("build.auth.known_hosts_file requires build.auth.ssh_key_file")
 	}
 	if s.Serve != nil {
 		switch s.Serve.Mode {

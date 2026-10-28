@@ -371,6 +371,20 @@ func (e *Engine) Wait(ctx context.Context, id string) (int, error) {
 	}
 }
 
+// Spec returns the spec a container was created with (mounts included, as
+// given), by id or name.
+func (e *Engine) Spec(idOrName string) (runtime.ContainerSpec, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	c, ok := e.find(idOrName)
+	if !ok {
+		return runtime.ContainerSpec{}, false
+	}
+	spec := c.spec
+	spec.Mounts = append([]runtime.Mount(nil), c.spec.Mounts...)
+	return spec, true
+}
+
 // Peer returns the far end of the pipe handed out by Attach.
 func (e *Engine) Peer(id string) (io.ReadWriteCloser, bool) {
 	e.mu.Lock()

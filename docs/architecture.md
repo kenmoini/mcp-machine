@@ -85,9 +85,13 @@ network from `podman.network` (default `mcp-machine`), and labeled:
 | `io.mcp-machine/transport` | `stdio` or `http` |
 
 How MCP Machine reaches an http-mode sibling depends on where it runs. Inside a
-container (detected through `/run/.containerenv`) it joins the sibling network
-itself, so a plain `podman run` needs no `--network` flag, and it dials the
-sibling by container name. As a bare binary on the host (development), the
+container (detected by the presence of `/run/.containerenv`) it joins the
+sibling network itself, so a plain `podman run` needs no `--network` flag, and
+it dials the sibling by container name. Joining needs its own container ID,
+which Podman writes into `/run/.containerenv` only for privileged containers;
+otherwise `serve` resolves its host name through the Podman API, and as a last
+resort reads `MCP_MACHINE_CONTAINER_ID`. If none works it logs a warning and
+does not join. As a bare binary on the host (development), the
 sibling publishes its port on `127.0.0.1` with an ephemeral host port and the
 endpoint dials that port.
 
@@ -101,8 +105,9 @@ stdout/stderr logs are what the UI shows on the server page.
   HTTP client, an SSE client, or tries both (`transport: auto`).
 - `command`: a generated container. `npx`, `node`, `uvx`, and `python` run in
   the matching image from `runtimes`, with a cache volume for npm or uv. A
-  `docker run` line is parsed into image, env, volumes, ports, and args. Always
-  stdio.
+  `docker run` line is parsed into image, env, volumes, mounts, ports, and
+  args; `${VAR}` in its env values and args (and in `command.args`) is expanded
+  when the container is resolved. Always stdio.
 - `build`: the repository is cloned with go-git (shallow), the image is built
   through the Podman API as `localhost/mcp-machine/<name>:<sha7>`, and the
   container runs in stdio or http mode. An image that already exists for the
@@ -116,7 +121,9 @@ write-back both trigger a reload. A reload that fails to parse or validate
 keeps the last good configuration and records the error, which the Config page
 shows. Each successful reload is handed to the manager, which reconciles by
 name and spec hash. The UI edits the same file through a `yaml.v3` node tree so
-comments and order survive; see [config.md](config.md).
+comments and order survive, serializes its writes, and reloads right after
+writing so the change is applied before the browser is redirected; see
+[config.md](config.md).
 
 ## Origin and TLS
 
@@ -125,7 +132,14 @@ Origin validation applies to the MCP routes (`/servers/{name}/mcp` and
 same-origin requests and requests with no `Origin` header (CLI clients) pass;
 cross-origin requests pass only if the origin is in `allowed_origins` or equals
 the `public_url` origin. The Go SDK's loopback DNS-rebinding protection stays
-on. The UI's state-changing requests have their own same-origin check. When
+on. The UI's state-changing requests have their own same-origin check. Browser
+requests (those with an `Origin` or `Sec-Fetch-*` header) to the MCP routes,
+and browser state-changing UI requests, also pass a host check
+(`httpadapter.HostGuard`): the `Host` header must be an IP address,
+`localhost`, the process's own host name, the `public_url` host, or an
+`allowed_origins` host, which stops DNS rebinding on LAN addresses (a
+rebinding page sends a matching `Origin`). Non-browser clients are not
+checked. When
 `tls.cert_file` and `tls.key_file` are both set, the server listens on TLS only.
 
 ## Operations endpoints

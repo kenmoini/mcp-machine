@@ -7,6 +7,7 @@ import (
 
 	"github.com/kenmoini/mcp-machine/internal/config"
 	"github.com/kenmoini/mcp-machine/internal/sources/clientconfig"
+	"github.com/kenmoini/mcp-machine/internal/sources/command"
 )
 
 func TestParseCommandEntry(t *testing.T) {
@@ -110,5 +111,76 @@ func TestSanitizeName(t *testing.T) {
 		if got := clientconfig.SanitizeName(in); got != want {
 			t.Errorf("SanitizeName(%q)=%q want %q", in, got, want)
 		}
+	}
+}
+
+func TestParseDockerRunEntry(t *testing.T) {
+	data := `{"mcpServers":{"github":{
+		"command":"docker",
+		"args":["run","-i","--rm","-e","GITHUB_PERSONAL_ACCESS_TOKEN","-e","LABEL=two words","ghcr.io/github/github-mcp-server","--toolsets","repos,issues","it's"],
+		"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"${GITHUB_TOKEN}"}
+	}}}`
+	got, err := clientconfig.Parse([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []config.ServerSpec{{
+		Name: "github",
+		Type: "command",
+		Command: &config.CommandSpec{
+			Run: `docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN -e 'LABEL=two words' ghcr.io/github/github-mcp-server --toolsets repos,issues 'it'\''s'`,
+			Env: map[string]string{"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"},
+		},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v\nwant %+v", got[0].Command, want[0].Command)
+	}
+}
+
+func TestParsePodmanRunEntry(t *testing.T) {
+	got, err := clientconfig.Parse([]byte(`{"mcpServers":{"p":{"command":"podman","args":["run","-i","img"]}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Command.Run != "podman run -i img" || got[0].Command.Command != "" || got[0].Command.Args != nil {
+		t.Fatalf("command = %+v", got[0].Command)
+	}
+	// docker without "run" is left alone (and rejected by validation).
+	got, err = clientconfig.Parse([]byte(`{"mcpServers":{"p":{"command":"docker","args":["ps"]}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Command.Command != "docker" || got[0].Command.Run != "" {
+		t.Fatalf("command = %+v", got[0].Command)
+	}
+}
+
+func TestImportGitHubDockerEntryRuns(t *testing.T) {
+	// The GitHub MCP server's documented client config, end to end: import,
+	// validate, resolve into a container.
+	data := `{"mcpServers":{"github":{
+		"command":"docker",
+		"args":["run","-i","--rm","-e","GITHUB_PERSONAL_ACCESS_TOKEN","ghcr.io/github/github-mcp-server"],
+		"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"ghp_example"}
+	}}}`
+	specs, err := clientconfig.Parse([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Servers: specs}
+	config.ApplyDefaults(cfg)
+	if err := config.Validate(cfg); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	res, err := command.Resolve(cfg, cfg.Servers[0])
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	c := res.Container
+	if c.Image != "ghcr.io/github/github-mcp-server" || !c.Stdin {
+		t.Fatalf("container = %+v", c)
+	}
+	if c.Env["GITHUB_PERSONAL_ACCESS_TOKEN"] != "ghp_example" {
+		t.Fatalf("env = %v", c.Env)
 	}
 }

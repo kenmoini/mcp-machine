@@ -55,7 +55,7 @@ validate: build
 image:
 	$(ENGINE) build \
 		--build-arg MCPM_VERSION=$(TAG) --build-arg MCPM_COMMIT=$(COMMIT) --build-arg MCPM_DATE=$(DATE) \
-		-t $(IMAGE):$(TAG) -f Containerfile .
+		-t $(IMAGE):$(TAG) -t $(IMAGE):latest -f Containerfile .
 
 push: image
 	$(ENGINE) push $(IMAGE):$(TAG)

@@ -110,3 +110,22 @@ func TestContainerignoreExcludesScratch(t *testing.T) {
 		}
 	}
 }
+
+func TestMakeImageTagsLatest(t *testing.T) {
+	// compose.yaml, the Quadlet unit and the README run :latest, so a local
+	// `make image` must produce it.
+	mk := readRepoFile(t, "Makefile")
+	i := strings.Index(mk, "\nimage:")
+	if i < 0 {
+		t.Fatal("Makefile has no image target")
+	}
+	recipe := mk[i:]
+	if j := strings.Index(recipe[1:], "\n\n"); j >= 0 {
+		recipe = recipe[:j+1]
+	}
+	for _, want := range []string{"-t $(IMAGE):$(TAG)", "-t $(IMAGE):latest"} {
+		if !strings.Contains(recipe, want) {
+			t.Errorf("image recipe missing %q:\n%s", want, recipe)
+		}
+	}
+}

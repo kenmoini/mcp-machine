@@ -25,6 +25,10 @@ const eventBuffer = 16
 // exitLogLines is how many trailing log lines a container-exit error quotes.
 const exitLogLines = 5
 
+// stableReady is how long a server must have been Ready for its next failure
+// to start a fresh retry budget.
+const stableReady = 60 * time.Second
+
 type evKind int
 
 const (
@@ -87,8 +91,10 @@ type runner struct {
 	gen      uint64            // bumped when a container starts, is stopped or is discarded
 	sess     *mcp.ClientSession
 	rwc      io.ReadWriteCloser
-	retries  int              // consecutive automatic retries; reset by Start
-	retryC   <-chan time.Time // pending retry timer; nil when none
+	retries  int // consecutive automatic retries; reset by Start and by a stable Ready (see fail)
+	// readySince is when the server last became Ready.
+	readySince time.Time
+	retryC     <-chan time.Time // pending retry timer; nil when none
 	// awaitExit: the last failure happened before the container's exit was
 	// visible; an exit of the same generation replaces the error.
 	awaitExit bool
@@ -351,6 +357,9 @@ func (r *runner) recoverAbandoned() {
 
 // set records a state transition in the registry.
 func (r *runner) set(state store.State, errMsg string) {
+	if state == store.StateReady && r.status.State != store.StateReady {
+		r.readySince = r.m.opts.Clock.Now()
+	}
 	r.status.State = state
 	r.status.Error = errMsg
 	r.status.Since = r.m.opts.Clock.Now()
@@ -400,9 +409,14 @@ func (r *runner) teardown() {
 }
 
 // fail tears down, moves to Failed and, unless the retry cap is reached,
-// schedules a retry. The timer is armed before the status is published so an
-// observer of Failed can already advance a manual clock past it.
+// schedules a retry. A server that was Ready for at least stableReady fails
+// as a new incident: its retry budget starts over. The timer is armed before
+// the status is published so an observer of Failed can already advance a
+// manual clock past it.
 func (r *runner) fail(err error) {
+	if r.status.State == store.StateReady && r.m.opts.Clock.Now().Sub(r.readySince) >= stableReady {
+		r.retries = 0
+	}
 	r.teardown()
 	r.awaitExit = false
 	r.abandoned = false

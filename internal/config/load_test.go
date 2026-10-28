@@ -299,3 +299,74 @@ func TestLoadRejectsEmptyFile(t *testing.T) {
 		})
 	}
 }
+
+func TestParseChecksVarsInRunAndArgs(t *testing.T) {
+	// ${VAR} in command.run and command.args is expanded when the container
+	// is resolved, not by the loader, but an unset variable must still make
+	// the config fail to load (so a reload reports it).
+	data := []byte(`servers:
+  - name: r
+    type: command
+    command:
+      run: docker run -i -e TOKEN=${RUN_TOKEN} img --org ${RUN_ORG}
+  - name: a
+    type: command
+    command:
+      command: npx
+      args: ["-y", "pkg", "--key", "${ARG_KEY}"]
+`)
+	_, err := config.Parse(data, noEnv)
+	if err == nil {
+		t.Fatal("Parse succeeded with unset variables in command.run and command.args")
+	}
+	for _, want := range []string{"${RUN_TOKEN} is not set", "${RUN_ORG} is not set", "${ARG_KEY} is not set"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+
+	all := func(name string) (string, bool) { return "value-of-" + name, true }
+	c, err := config.Parse(data, all)
+	if err != nil {
+		t.Fatalf("Parse with every variable set: %v", err)
+	}
+	if got := c.Servers[0].Command.Run; got != "docker run -i -e TOKEN=${RUN_TOKEN} img --org ${RUN_ORG}" {
+		t.Errorf("command.run = %q, want it left as written", got)
+	}
+	if got := c.Servers[1].Command.Args[3]; got != "${ARG_KEY}" {
+		t.Errorf("command.args[3] = %q, want it left as written", got)
+	}
+}
+
+func TestUnsetVars(t *testing.T) {
+	spec := config.ServerSpec{
+		Name: "x",
+		Env:  map[string]string{"A": "${SET}", "B": "${ENV_MISSING}"},
+		Remote: &config.RemoteSpec{
+			URL:     "https://${NOT_EXPANDED}/mcp", // URLs are not expanded
+			Headers: map[string]string{"Authorization": "Bearer ${HDR_MISSING}"},
+		},
+		Command: &config.CommandSpec{
+			Run:  "docker run -i img ${RUN_MISSING}",
+			Args: []string{"${ARG_MISSING}", "${SET}"},
+			Env:  map[string]string{"C": "${CMD_MISSING}"},
+		},
+		Container: &config.ContainerOverrides{Env: map[string]string{"D": "${CT_MISSING}"}},
+		Build: &config.BuildSpec{
+			Args: map[string]string{"E": "${BUILD_MISSING}"},
+			Auth: &config.GitAuth{Token: "${TOKEN_MISSING}"},
+		},
+	}
+	lookup := func(name string) (string, bool) { return "v", name == "SET" }
+	got := config.UnsetVars(spec, lookup)
+	want := []string{"ARG_MISSING", "BUILD_MISSING", "CMD_MISSING", "CT_MISSING", "ENV_MISSING", "HDR_MISSING", "RUN_MISSING", "TOKEN_MISSING"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("UnsetVars = %v, want %v", got, want)
+	}
+	if spec.Env["A"] != "${SET}" || spec.Build.Auth.Token != "${TOKEN_MISSING}" {
+		t.Error("UnsetVars modified the spec")
+	}
+	if got := config.UnsetVars(config.ServerSpec{Name: "y"}, lookup); len(got) != 0 {
+		t.Errorf("empty spec: %v", got)
+	}
+}

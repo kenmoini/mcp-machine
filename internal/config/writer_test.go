@@ -1,9 +1,11 @@
 package config_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -397,4 +399,41 @@ func TestWriterTriggersSingleWatcherCallback(t *testing.T) {
 		t.Errorf("servers = %+v", c.Servers)
 	}
 	h.expectNoChange(t)
+}
+
+func TestWriterConcurrentAddsAllLand(t *testing.T) {
+	// Each Writer value edits the same file (the web layer builds one per
+	// process, but nothing stops two): edits are serialized, none is lost,
+	// and no temp file is left behind.
+	p := newTestConfig(t, writerOriginal)
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := range n {
+		wg.Go(func() {
+			s := gammaSpec()
+			s.Name = fmt.Sprintf("srv-%02d", i)
+			errs <- config.Writer{Path: p}.AddServer(s)
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("AddServer: %v", err)
+		}
+	}
+	c := loadAccept(t, p)
+	if len(c.Servers) != 2+n {
+		t.Fatalf("servers = %d, want %d", len(c.Servers), 2+n)
+	}
+	entries, err := os.ReadDir(filepath.Dir(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "config.yaml" {
+			t.Errorf("leftover file %s", e.Name())
+		}
+	}
 }

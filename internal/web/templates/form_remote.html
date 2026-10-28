@@ -11,7 +11,8 @@
   <div class="field">
     <label for="f-remote-transport">Transport</label>
     <select id="f-remote-transport" name="remote.transport">
-      <option value="auto"{{if or (eq (.V "remote.transport") "auto") (eq (.V "remote.transport") "")}} selected{{end}}>auto</option>
+      <option value=""{{if eq (.V "remote.transport") ""}} selected{{end}}>default (auto)</option>
+      <option value="auto"{{if eq (.V "remote.transport") "auto"}} selected{{end}}>auto</option>
       <option value="http"{{if eq (.V "remote.transport") "http"}} selected{{end}}>http</option>
       <option value="sse"{{if eq (.V "remote.transport") "sse"}} selected{{end}}>sse</option>
     </select>

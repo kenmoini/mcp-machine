@@ -4,11 +4,6 @@
   <thead>
     <tr><th>Name</th><th>Type</th><th>State</th><th>Image</th><th>Since</th><th>Restarts</th><th>Actions</th></tr>
   </thead>
-  <tbody>
-  {{range .}}{{template "_server_row.html" .}}
-  {{else}}
-    <tr><td colspan="7" class="empty">No servers configured.</td></tr>
-  {{end}}
-  </tbody>
+  {{template "_server_rows.html" .}}
 </table>
 {{end}}

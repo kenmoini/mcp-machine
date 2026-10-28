@@ -47,7 +47,8 @@ After a failure the runner schedules an automatic retry with exponential
 backoff: 1s, 2s, 4s, 8s, 16s, 32s, then 60s for every further attempt. After 10
 automatic retries the failure is sticky: the server stays `failed` until you
 press Start (or Restart, Rebuild) or change its configuration. Start resets the
-retry budget. A retry resumes from `creating` when the image is already known
+retry budget, and so does a server that stays `ready` for at least 60 seconds:
+its next failure is a new incident with a fresh budget of 10 retries. A retry resumes from `creating` when the image is already known
 and from the top (`resolving`) otherwise; each retry re-creates the container
 (stop, remove, create). The restart counter increments on every automatic retry.
 

@@ -42,6 +42,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return exitUsage
 	}
 	switch cmd := args[0]; cmd {
+	case "help", "-h", "--help":
+		usage(stdout)
+		return exitOK
 	case "version":
 		fmt.Fprintf(stdout, "mcp-machine %s (%s, %s)\n", buildinfo.Version, buildinfo.Commit, buildinfo.Date)
 		return exitOK
@@ -69,5 +72,8 @@ commands:
   validate   validate configuration
   import     import MCP server definitions
   version    print version information
+  help       print this help
+
+Run "mcp-machine <command> -h" for a command's flags.
 `)
 }

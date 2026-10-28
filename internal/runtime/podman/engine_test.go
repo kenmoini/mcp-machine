@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -115,5 +116,19 @@ func TestIsAlreadyExists(t *testing.T) {
 	}
 	if isAlreadyExists(nil) || isAlreadyExists(errors.New("boom")) {
 		t.Error("unrelated errors should not count")
+	}
+}
+
+func TestContainerfilePath(t *testing.T) {
+	ctx := filepath.Join(string(filepath.Separator), "work", "repo", "sub")
+	for _, tc := range []struct{ in, want string }{
+		{"", filepath.Join(ctx, "Containerfile")},
+		{"Containerfile", filepath.Join(ctx, "Containerfile")},
+		{"build/Dockerfile", filepath.Join(ctx, "build", "Dockerfile")},
+		{filepath.Join(string(filepath.Separator), "abs", "Containerfile"), filepath.Join(string(filepath.Separator), "abs", "Containerfile")},
+	} {
+		if got := containerfilePath(ctx, tc.in); got != tc.want {
+			t.Errorf("containerfilePath(%q, %q) = %q, want %q", ctx, tc.in, got, tc.want)
+		}
 	}
 }

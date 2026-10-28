@@ -156,3 +156,48 @@ func TestConfigStateRawKeepsPlaceholders(t *testing.T) {
 		t.Error("missing file: want error")
 	}
 }
+
+func TestNewManagerJoinsNetworkWithoutIDLine(t *testing.T) {
+	// A non-privileged container's /run/.containerenv has no id= line: the
+	// ID is resolved from the host name through the engine and the manager
+	// joins the servers' network with it.
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		t.Skipf("no host name: %v", err)
+	}
+	envFile := filepath.Join(t.TempDir(), "containerenv")
+	if err := os.WriteFile(envFile, []byte("graphRootMounted=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := containerenvPath
+	containerenvPath = envFile
+	t.Cleanup(func() { containerenvPath = old })
+
+	eng := fake.New()
+	eng.Seed(runtime.ContainerInfo{ID: "self-0123456789", Name: host, State: "running"})
+	_, _, mux := newTestDeps(t, eng, "listen: 127.0.0.1:0\n")
+	waitFor(t, "readyz 200", func() bool { code, _ := get(mux, "/readyz"); return code == http.StatusOK })
+
+	conns := eng.Connections()
+	if len(conns) != 1 || conns[0] != [2]string{"self-0123456789", "mcp-machine"} {
+		t.Fatalf("ConnectNetwork calls = %v, want [[self-0123456789 mcp-machine]]", conns)
+	}
+}
+
+func TestNewManagerInContainerUnknownIDSkipsJoin(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "containerenv")
+	if err := os.WriteFile(envFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := containerenvPath
+	containerenvPath = envFile
+	t.Cleanup(func() { containerenvPath = old })
+	t.Setenv(runtime.SelfIDEnv, "")
+
+	eng := fake.New()
+	_, _, mux := newTestDeps(t, eng, "listen: 127.0.0.1:0\n")
+	waitFor(t, "readyz 200", func() bool { code, _ := get(mux, "/readyz"); return code == http.StatusOK })
+	if conns := eng.Connections(); len(conns) != 0 {
+		t.Fatalf("ConnectNetwork calls = %v, want none", conns)
+	}
+}

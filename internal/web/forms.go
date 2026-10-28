@@ -113,13 +113,16 @@ func specFromForm(v url.Values) (config.ServerSpec, error) {
 		}
 	}
 	if s.Type == "build" || anySet("build.repo", "build.ref", "build.subdir", "build.containerfile", "build.args",
-		"build.auth.token", "build.auth.ssh_key_file") {
+		"build.auth.token", "build.auth.ssh_key_file", "build.auth.known_hosts_file") {
 		b := &config.BuildSpec{
 			Repo: get("build.repo"), Ref: get("build.ref"), Subdir: get("build.subdir"),
 			Containerfile: get("build.containerfile"), Args: kv("build.args", "=", envShape),
 		}
-		if anySet("build.auth.token", "build.auth.ssh_key_file") {
-			b.Auth = &config.GitAuth{Token: get("build.auth.token"), SSHKeyFile: get("build.auth.ssh_key_file")}
+		if anySet("build.auth.token", "build.auth.ssh_key_file", "build.auth.known_hosts_file") {
+			b.Auth = &config.GitAuth{
+				Token: get("build.auth.token"), SSHKeyFile: get("build.auth.ssh_key_file"),
+				KnownHostsFile: get("build.auth.known_hosts_file"),
+			}
 		}
 		s.Build = b
 	}
@@ -190,6 +193,7 @@ func formFromSpec(s config.ServerSpec) url.Values {
 		if b.Auth != nil {
 			set("build.auth.token", b.Auth.Token)
 			set("build.auth.ssh_key_file", b.Auth.SSHKeyFile)
+			set("build.auth.known_hosts_file", b.Auth.KnownHostsFile)
 		}
 	}
 	if sv := s.Serve; sv != nil {
@@ -282,6 +286,47 @@ func cloneSections(s config.ServerSpec) config.ServerSpec {
 	return s
 }
 
+// stripDefaults returns s without the values config.ApplyDefaults would fill
+// in anyway, found by applying the defaults to an empty spec with the same
+// sections. Raw() parses the file, so its specs carry those defaults; an
+// edit form prefilled with them would write them back as explicit keys. s
+// is not modified.
+func stripDefaults(s config.ServerSpec) config.ServerSpec {
+	s = cloneSections(s)
+	empty := config.ServerSpec{Type: s.Type}
+	if s.Remote != nil {
+		empty.Remote = &config.RemoteSpec{}
+	}
+	if s.Command != nil {
+		empty.Command = &config.CommandSpec{}
+	}
+	if s.Build != nil {
+		empty.Build = &config.BuildSpec{}
+	}
+	if s.Serve != nil {
+		empty.Serve = &config.ServeSpec{}
+	}
+	defs := config.Config{Servers: []config.ServerSpec{empty}}
+	config.ApplyDefaults(&defs)
+	d := defs.Servers[0]
+
+	if s.Remote != nil && d.Remote != nil && s.Remote.Transport == d.Remote.Transport {
+		s.Remote.Transport = ""
+	}
+	if s.Build != nil && d.Build != nil && s.Build.Containerfile == d.Build.Containerfile {
+		s.Build.Containerfile = ""
+	}
+	if s.Serve != nil && d.Serve != nil {
+		if s.Serve.Mode == d.Serve.Mode {
+			s.Serve.Mode = ""
+		}
+		if *s.Serve == (config.ServeSpec{}) {
+			s.Serve = nil
+		}
+	}
+	return s
+}
+
 // required returns the problems config.Validate does not cover.
 func required(s config.ServerSpec) []string {
 	var out []string
@@ -296,7 +341,8 @@ func required(s config.ServerSpec) []string {
 
 // check validates specs against the file's current (unexpanded) configuration
 // with them added, or, when replace names a server, with specs[0] taking its
-// place. It returns the problems found; err means the file could not be read.
+// place, and checks that every ${VAR} the specs reference is set. It returns
+// the problems found; err means the file could not be read.
 func (u *ui) check(replace string, specs ...config.ServerSpec) (problems []string, err error) {
 	raw, err := u.Config.Raw()
 	if err != nil {
@@ -323,6 +369,11 @@ func (u *ui) check(replace string, specs ...config.ServerSpec) (problems []strin
 
 	for _, s := range specs {
 		problems = append(problems, required(s)...)
+		// The form validates against placeholders, but the file it writes is
+		// loaded with the real environment: every variable must be set.
+		for _, name := range config.UnsetVars(s, u.LookupEnv) {
+			problems = append(problems, fmt.Sprintf("server %q: environment variable %s is not set", s.Name, name))
+		}
 	}
 	return append(problems, messages(config.Validate(&cp))...), nil
 }
@@ -352,9 +403,6 @@ func (u *ui) newForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vals := url.Values{"type": {t}, "enabled": {"1"}}
-	if t == "remote" {
-		vals.Set("remote.transport", "auto")
-	}
 	u.formPage(w, http.StatusOK, formData{Type: t, Action: "/servers/new", Values: vals})
 }
 
@@ -392,6 +440,7 @@ func (u *ui) createServer(w http.ResponseWriter, r *http.Request) {
 		u.formPage(w, http.StatusInternalServerError, d)
 		return
 	}
+	u.reloadAfterWrite()
 	http.Redirect(w, r, "/servers/"+spec.Name, http.StatusSeeOther)
 }
 
@@ -425,7 +474,7 @@ func (u *ui) editForm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	u.formPage(w, http.StatusOK, editData(spec, formFromSpec(spec)))
+	u.formPage(w, http.StatusOK, editData(spec, formFromSpec(stripDefaults(spec))))
 }
 
 func (u *ui) updateServer(w http.ResponseWriter, r *http.Request) {
@@ -465,6 +514,7 @@ func (u *ui) updateServer(w http.ResponseWriter, r *http.Request) {
 		u.formPage(w, http.StatusInternalServerError, d)
 		return
 	}
+	u.reloadAfterWrite()
 	http.Redirect(w, r, "/servers/"+cur.Name, http.StatusSeeOther)
 }
 
@@ -478,10 +528,22 @@ func (u *ui) deleteServer(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := u.Writer.DeleteServer(cur.Name); err != nil {
 		u.Logger.Warn("delete server", "server", cur.Name, "err", err)
-		d := editData(cur, formFromSpec(cur))
+		d := editData(cur, formFromSpec(stripDefaults(cur)))
 		d.Errors = []string{err.Error()}
 		u.formPage(w, http.StatusInternalServerError, d)
 		return
 	}
+	u.reloadAfterWrite()
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// reloadAfterWrite applies the file just written before the browser is
+// redirected, so the page it lands on already reflects the change; the file
+// watcher would do the same, but only after its debounce. Applying is
+// serialized and idempotent, so the watcher's later reload changes nothing. A
+// failed reload is recorded by the config state and shown on the config page.
+func (u *ui) reloadAfterWrite() {
+	if err := u.Config.Reload(); err != nil {
+		u.Logger.Warn("reload config after edit", "err", err)
+	}
 }

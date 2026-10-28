@@ -115,8 +115,10 @@ func setDefault(field *string, def string) {
 	}
 }
 
-// expandEnv replaces ${VAR} in secret-bearing string fields. All unset
-// variables are collected and reported in a single joined error.
+// expandEnv replaces ${VAR} in secret-bearing string fields. command.run
+// and command.args are only checked: they stay as written and are expanded
+// when the container is resolved, but their variables must be set too. All
+// unset variables are collected and reported in a single joined error.
 func expandEnv(c *Config, lookup func(string) (string, bool)) error {
 	missing := map[string]bool{}
 	expand := func(s string) string {
@@ -130,11 +132,7 @@ func expandEnv(c *Config, lookup func(string) (string, bool)) error {
 			return v
 		})
 	}
-	expandMap := func(m map[string]string) {
-		for k, v := range m {
-			m[k] = expand(v)
-		}
-	}
+	check := checker(lookup, missing)
 
 	for i := range c.Registries {
 		r := &c.Registries[i]
@@ -142,36 +140,90 @@ func expandEnv(c *Config, lookup func(string) (string, bool)) error {
 		r.Password = expand(r.Password)
 	}
 	for i := range c.Servers {
-		s := &c.Servers[i]
-		expandMap(s.Env)
-		if s.Remote != nil {
-			expandMap(s.Remote.Headers)
-		}
-		if s.Command != nil {
-			expandMap(s.Command.Env)
-		}
-		if s.Container != nil {
-			expandMap(s.Container.Env)
-		}
-		if s.Build != nil {
-			expandMap(s.Build.Args)
-			if s.Build.Auth != nil {
-				s.Build.Auth.Token = expand(s.Build.Auth.Token)
-			}
-		}
+		serverVars(&c.Servers[i], expand, check)
 	}
 
 	if len(missing) == 0 {
 		return nil
 	}
-	names := make([]string, 0, len(missing))
-	for n := range missing {
-		names = append(names, n)
-	}
-	sort.Strings(names)
+	names := sortedNames(missing)
 	errs := make([]error, len(names))
 	for i, n := range names {
 		errs[i] = fmt.Errorf("config: ${%s} is not set", n)
 	}
 	return errors.Join(errs...)
+}
+
+// UnsetVars returns, sorted, the names of the ${VAR} references in s that
+// the loader would resolve (or, for command.run and command.args, require)
+// and lookup does not know. s is not modified.
+func UnsetVars(s ServerSpec, lookup func(string) (string, bool)) []string {
+	missing := map[string]bool{}
+	serverVars(&s, nil, checker(lookup, missing))
+	return sortedNames(missing)
+}
+
+// checker returns a function recording in missing every ${VAR} in its
+// argument that lookup does not know.
+func checker(lookup func(string) (string, bool), missing map[string]bool) func(string) {
+	return func(s string) {
+		for _, m := range envRef.FindAllStringSubmatch(s, -1) {
+			if _, ok := lookup(m[1]); !ok {
+				missing[m[1]] = true
+			}
+		}
+	}
+}
+
+// serverVars visits the fields of s that may hold ${VAR} references. The
+// expanded fields are replaced by expand(value); when expand is nil they are
+// passed to check instead and s is left untouched. command.run and
+// command.args are always only checked.
+func serverVars(s *ServerSpec, expand func(string) string, check func(string)) {
+	str := func(p *string) {
+		if expand == nil {
+			check(*p)
+			return
+		}
+		*p = expand(*p)
+	}
+	strMap := func(m map[string]string) {
+		for k, v := range m {
+			if expand == nil {
+				check(v)
+				continue
+			}
+			m[k] = expand(v)
+		}
+	}
+
+	strMap(s.Env)
+	if s.Remote != nil {
+		strMap(s.Remote.Headers)
+	}
+	if s.Command != nil {
+		strMap(s.Command.Env)
+		check(s.Command.Run)
+		for _, a := range s.Command.Args {
+			check(a)
+		}
+	}
+	if s.Container != nil {
+		strMap(s.Container.Env)
+	}
+	if s.Build != nil {
+		strMap(s.Build.Args)
+		if s.Build.Auth != nil {
+			str(&s.Build.Auth.Token)
+		}
+	}
+}
+
+func sortedNames(set map[string]bool) []string {
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }

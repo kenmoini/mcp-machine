@@ -54,9 +54,7 @@ func (w *fakeWriter) DeleteServer(name string) error {
 func (e *env) post(target string, form url.Values, hdr ...string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest("POST", target, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	for i := 0; i+1 < len(hdr); i += 2 {
-		req.Header.Set(hdr[i], hdr[i+1])
-	}
+	setHeaders(req, hdr)
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
 	return rec
@@ -65,7 +63,7 @@ func (e *env) post(target string, form url.Values, hdr ...string) *httptest.Resp
 func TestNewFormRendersPerType(t *testing.T) {
 	e := newEnv(t)
 	body := e.do("GET", "/servers/new?type=build").Body.String()
-	mustContain(t, body, `name="build.repo"`, `name="build.auth.token"`, `name="name"`, `name="env"`, `name="container.image"`)
+	mustContain(t, body, `name="build.repo"`, `name="build.auth.token"`, `name="build.auth.known_hosts_file"`, `name="name"`, `name="env"`, `name="container.image"`)
 	for _, absent := range []string{`name="remote.url"`, `name="command.command"`} {
 		if strings.Contains(body, absent) {
 			t.Errorf("build form contains %s", absent)
@@ -261,7 +259,9 @@ func TestFormsUnavailableWithoutWriter(t *testing.T) {
 	h := web.New(web.Deps{Registry: store.NewRegistry()})
 	for _, tc := range [][2]string{{"GET", "/servers/new"}, {"POST", "/servers/new"}, {"GET", "/servers/import"}, {"POST", "/servers/x/delete"}} {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(tc[0], tc[1], nil))
+		req := httptest.NewRequest(tc[0], tc[1], nil)
+		req.Host = "127.0.0.1:8080"
+		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Errorf("%s %s: status %d", tc[0], tc[1], rec.Code)
 		}
@@ -301,6 +301,11 @@ func TestSpecFormRoundTrip(t *testing.T) {
 			"build.containerfile": {"Containerfile"}, "build.args": {"A=1\nB=${B}"},
 			"build.auth.token": {"${GIT_TOKEN}"}, "build.auth.ssh_key_file": {"/keys/id"},
 			"serve.mode": {"stdio"},
+		},
+		{
+			"name": {"b2"}, "type": {"build"}, "enabled": {"1"},
+			"build.repo":              {"git@git.example:r.git"},
+			"build.auth.ssh_key_file": {"/keys/id"}, "build.auth.known_hosts_file": {"/keys/known_hosts"},
 		},
 	}
 	for _, v := range forms {
@@ -497,5 +502,131 @@ func TestEditPreservesMultilineRun(t *testing.T) {
 	}
 	if len(e.wr.Updated) != 1 || e.wr.Updated[0].Spec.Command.Run != run {
 		t.Errorf("Updated = %+v", e.wr.Updated)
+	}
+}
+
+func TestWritesReloadBeforeRedirect(t *testing.T) {
+	// The new server's page exists only once the config has been applied:
+	// the form reloads before redirecting instead of waiting for the watcher.
+	e := newEnv(t)
+	e.cfg.onReload = func() { e.reg.Set(store.Status{Name: "x", State: store.StateDefined}) }
+	rec := e.post("/servers/new", remoteForm())
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if !e.cfg.reloaded {
+		t.Fatal("create did not reload the configuration")
+	}
+	if got := e.do("GET", rec.Header().Get("Location")); got.Code != 200 {
+		t.Fatalf("redirect target: status %d", got.Code)
+	}
+
+	for _, tc := range []struct {
+		name string
+		do   func() *httptest.ResponseRecorder
+	}{
+		{"update", func() *httptest.ResponseRecorder {
+			return e.post("/servers/beta/edit", url.Values{"remote.url": {"https://y.example/mcp"}, "enabled": {"1"}})
+		}},
+		{"delete", func() *httptest.ResponseRecorder { return e.post("/servers/beta/delete", nil) }},
+		{"import", func() *httptest.ResponseRecorder {
+			form := hiddenFields(t, e.post("/servers/import", url.Values{"text": {twoServersJSON}}).Body.String())
+			form.Set("confirm", "1")
+			e.cfg.reloaded = false
+			return e.post("/servers/import", form)
+		}},
+	} {
+		e.cfg.reloaded = false
+		e.cfg.onReload = nil
+		if rec := tc.do(); rec.Code != http.StatusSeeOther {
+			t.Fatalf("%s: status %d: %s", tc.name, rec.Code, rec.Body)
+		}
+		if !e.cfg.reloaded {
+			t.Errorf("%s did not reload the configuration", tc.name)
+		}
+	}
+}
+
+func TestFormRejectsUnsetVariables(t *testing.T) {
+	// A spec referencing an unset ${VAR} would be written, fail to reload,
+	// and stop the next start: the form refuses it instead.
+	e := newEnv(t)
+	f := remoteForm()
+	f.Set("remote.headers", "Authorization: Bearer ${UNSET_TOKEN}")
+	f.Set("env", "A=${UNSET_A}\nB=${TOK}")
+	rec := e.post("/servers/new", f)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d", rec.Code)
+	}
+	mustContain(t, rec.Body.String(), "environment variable UNSET_A is not set", "environment variable UNSET_TOKEN is not set")
+	if strings.Contains(rec.Body.String(), "environment variable TOK") {
+		t.Error("a set variable was reported")
+	}
+	if len(e.wr.Added) != 0 || e.cfg.reloaded {
+		t.Errorf("written anyway: %+v", e.wr.Added)
+	}
+
+	// Editing: the same check applies to the changed spec.
+	rec = e.post("/servers/alpha/edit", url.Values{"command.command": {"npx"}, "command.args": {"--key\n${UNSET_KEY}"}, "enabled": {"1"}})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("edit: status %d", rec.Code)
+	}
+	mustContain(t, rec.Body.String(), "environment variable UNSET_KEY is not set")
+	if len(e.wr.Updated) != 0 {
+		t.Errorf("updated anyway: %+v", e.wr.Updated)
+	}
+}
+
+func TestEditPrefillOmitsDefaults(t *testing.T) {
+	// Raw() parses the file, which applies defaults; the edit form must not
+	// turn them into explicit keys on the first save.
+	raw, err := config.Parse([]byte(`
+servers:
+  - {name: r, type: remote, remote: {url: "https://r.example/mcp"}}
+  - {name: rs, type: remote, remote: {url: "https://r.example/sse", transport: sse}}
+  - {name: b, type: build, build: {repo: "https://git.example/b.git"}}
+  - {name: bc, type: build, build: {repo: "https://git.example/b.git", containerfile: build/Dockerfile}, serve: {mode: http, port: 3000}}
+  - {name: c, type: command, command: {command: npx, args: [x]}}
+`), func(string) (string, bool) { return "x", true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]config.ServerSpec{}
+	for _, s := range raw.Servers {
+		byName[s.Name] = web.StripDefaults(s)
+	}
+	if r := byName["r"]; r.Remote == nil || r.Remote.Transport != "" || r.Remote.URL != "https://r.example/mcp" {
+		t.Errorf("r = %+v", r.Remote)
+	}
+	if rs := byName["rs"]; rs.Remote.Transport != "sse" {
+		t.Errorf("rs transport = %q", rs.Remote.Transport)
+	}
+	if b := byName["b"]; b.Build == nil || b.Build.Containerfile != "" || b.Serve != nil {
+		t.Errorf("b = %+v serve %+v", b.Build, b.Serve)
+	}
+	if bc := byName["bc"]; bc.Build.Containerfile != "build/Dockerfile" || bc.Serve == nil || bc.Serve.Mode != "http" || bc.Serve.Port != 3000 {
+		t.Errorf("bc = %+v serve %+v", bc.Build, bc.Serve)
+	}
+	if c := byName["c"]; c.Serve != nil || c.Command.Command != "npx" {
+		t.Errorf("c = %+v serve %+v", c.Command, c.Serve)
+	}
+	if raw.Servers[0].Remote.Transport != "auto" || raw.Servers[2].Serve == nil {
+		t.Error("StripDefaults modified its argument")
+	}
+
+	// End to end: an unchanged edit posts no default-valued fields.
+	e := newEnv(t)
+	e.cfg.raw = raw
+	for name, absent := range map[string][]string{
+		"r": {`<option value="auto" selected>`},
+		"b": {`value="Containerfile"`, `<option value="stdio" selected>`},
+		"c": {`<option value="stdio" selected>`},
+	} {
+		body := e.do("GET", "/servers/"+name+"/edit").Body.String()
+		for _, a := range absent {
+			if strings.Contains(body, a) {
+				t.Errorf("edit %s prefills %s", name, a)
+			}
+		}
 	}
 }

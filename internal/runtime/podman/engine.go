@@ -160,16 +160,25 @@ func (e *Engine) BuildImage(ctx context.Context, req runtime.BuildRequest) (stri
 			DockerAuthConfig: &imageTypes.DockerAuthConfig{Username: req.Auth.Username, Password: req.Auth.Password},
 		}
 	}
-	cf := req.Containerfile
-	if cf == "" {
-		cf = filepath.Join(req.ContextDir, "Containerfile")
-	}
-	files := []string{cf}
+	files := []string{containerfilePath(req.ContextDir, req.Containerfile)}
 	report, err := images.Build(c, files, types.BuildOptions{BuildOptions: bo, ContainerFiles: files})
 	if err != nil {
 		return "", mapErr(err)
 	}
 	return report.ID, nil
+}
+
+// containerfilePath returns the Containerfile to build with. A relative path
+// is relative to the build context; images.Build would otherwise resolve it
+// against the process's working directory.
+func containerfilePath(contextDir, containerfile string) string {
+	if containerfile == "" {
+		containerfile = "Containerfile"
+	}
+	if filepath.IsAbs(containerfile) {
+		return containerfile
+	}
+	return filepath.Join(contextDir, containerfile)
 }
 
 func (e *Engine) CreateContainer(ctx context.Context, spec runtime.ContainerSpec) (string, error) {

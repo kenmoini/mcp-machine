@@ -403,3 +403,34 @@ func TestServeReloadErrorIsRecorded(t *testing.T) {
 	cancel()
 	waitExit(t, done, errb)
 }
+
+func TestListenOrTLSFailureStartsNothing(t *testing.T) {
+	// The listener and the TLS key pair come first: when either fails, no
+	// engine is connected and no manager starts containers.
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"bad listen address": "listen: 127.0.0.1:not-a-port\n",
+		"missing key pair": fmt.Sprintf("listen: 127.0.0.1:0\ntls:\n  cert_file: %s\n  key_file: %s\n",
+			filepath.Join(dir, "missing.crt"), filepath.Join(dir, "missing.key")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeConfig(t, body)
+			engines := 0
+			var out, errb bytes.Buffer
+			code := cli.Run(context.Background(), []string{"serve", "-c", path}, strings.NewReader(""), &out, &errb,
+				cli.Options{NewEngine: func(context.Context, string) (runtime.Engine, error) {
+					engines++
+					return fake.New(), nil
+				}})
+			if code != 1 {
+				t.Fatalf("code = %d, want 1; stderr=%q", code, errb.String())
+			}
+			if engines != 0 {
+				t.Errorf("engine created %d times before the listener failed", engines)
+			}
+			if strings.Contains(out.String(), "listening on") {
+				t.Errorf("stdout = %q", out.String())
+			}
+		})
+	}
+}

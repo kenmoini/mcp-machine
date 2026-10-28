@@ -318,3 +318,49 @@ func TestNameRE(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateCommandMustBeARuntime(t *testing.T) {
+	c, err := config.Parse([]byte(`
+runtimes:
+  bun: oven/bun:1
+servers:
+  - {name: d, type: command, command: {command: docker, args: [run, -i, img]}}
+  - {name: b, type: command, command: {command: bun, args: [x]}}
+  - {name: n, type: command, command: {command: npx, args: [x]}}
+`), anyEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = config.Validate(c)
+	if err == nil || !strings.Contains(err.Error(), `server "d": command.command "docker" is not a configured runtime`) {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), `"b"`) || strings.Contains(err.Error(), `"n"`) {
+		t.Fatalf("configured runtimes rejected: %v", err)
+	}
+}
+
+func TestValidateKnownHostsNeedsSSHKey(t *testing.T) {
+	c, err := config.Parse([]byte(`
+servers:
+  - name: ok
+    type: build
+    build: {repo: "git@github.com:o/r.git", auth: {ssh_key_file: /k, known_hosts_file: /kh}}
+  - name: bad
+    type: build
+    build: {repo: "https://github.com/o/r.git", auth: {token: t, known_hosts_file: /kh}}
+`), anyEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Servers[0].Build.Auth.KnownHostsFile != "/kh" {
+		t.Fatalf("known_hosts_file = %q", c.Servers[0].Build.Auth.KnownHostsFile)
+	}
+	err = config.Validate(c)
+	if err == nil || !strings.Contains(err.Error(), `server "bad": build.auth.known_hosts_file requires build.auth.ssh_key_file`) {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), `"ok"`) {
+		t.Fatalf("valid entry rejected: %v", err)
+	}
+}

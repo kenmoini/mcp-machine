@@ -5,9 +5,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -174,5 +176,75 @@ func TestGoGitAuthMethod(t *testing.T) {
 	}
 	if _, err := AuthMethod("git@github.com:o/r.git", &config.GitAuth{SSHKeyFile: filepath.Join(t.TempDir(), "missing")}); err == nil {
 		t.Fatal("missing key file: want error")
+	}
+}
+
+func TestGoGitAuthMethodKnownHosts(t *testing.T) {
+	dir := t.TempDir()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blk, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyFile := filepath.Join(dir, "id_ed25519")
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(blk), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The server's host key, recorded in a known_hosts file.
+	hostPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostKey, err := ssh.NewPublicKey(hostPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	khFile := filepath.Join(dir, "known_hosts")
+	line := "git.example.com " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostKey))) + "\n"
+	if err := os.WriteFile(khFile, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := AuthMethod("git@git.example.com:o/r.git", &config.GitAuth{SSHKeyFile: keyFile, KnownHostsFile: khFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk, ok := m.(*gitssh.PublicKeys)
+	if !ok || pk.HostKeyCallback == nil {
+		t.Fatalf("auth = %#v, want public keys with a host key callback", m)
+	}
+	if want := ssh.KeyAlgoED25519; !slices.Contains(pk.HostKeyAlgorithms, want) {
+		t.Errorf("HostKeyAlgorithms = %v, want it to contain %s", pk.HostKeyAlgorithms, want)
+	}
+	addr := &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 22}
+	if err := pk.HostKeyCallback("git.example.com:22", addr, hostKey); err != nil {
+		t.Errorf("known host key rejected: %v", err)
+	}
+	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	other, _ := ssh.NewPublicKey(otherPub)
+	if err := pk.HostKeyCallback("git.example.com:22", addr, other); err == nil {
+		t.Error("unknown host key accepted")
+	}
+
+	// Without known_hosts_file go-git's default lookup (SSH_KNOWN_HOSTS,
+	// ~/.ssh/known_hosts) applies when connecting.
+	m, err = AuthMethod("ssh://git@git.example.com:2222/o/r.git", &config.GitAuth{SSHKeyFile: keyFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pk := m.(*gitssh.PublicKeys); pk.HostKeyCallback != nil {
+		t.Error("host key callback set without known_hosts_file")
+	}
+
+	if _, err := AuthMethod("git@git.example.com:o/r.git", &config.GitAuth{SSHKeyFile: keyFile, KnownHostsFile: filepath.Join(dir, "missing")}); err == nil ||
+		!strings.Contains(err.Error(), "known_hosts") {
+		t.Errorf("missing known_hosts file: err = %v", err)
+	}
+	if _, err := AuthMethod("https://git.example.com/o/r.git", &config.GitAuth{Token: "t", KnownHostsFile: khFile}); err == nil {
+		t.Error("known_hosts_file with token: want error")
 	}
 }

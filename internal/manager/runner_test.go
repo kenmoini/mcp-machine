@@ -874,3 +874,34 @@ func TestRunnerStopInterruptsHungDial(t *testing.T) {
 		t.Errorf("%d retry timers pending after an interrupted dial, want 0", n)
 	}
 }
+
+func TestRunnerRetryBudgetResetsAfterStableReady(t *testing.T) {
+	h := newHarness(t, manager.Options{MaxRetries: 1})
+	st, _ := h.ready()
+
+	// One crash uses the whole budget.
+	h.eng.Exit(st.ContainerID, 1)
+	waitState(t, h.reg, "a", store.StateFailed)
+	h.clk.Advance(time.Second)
+	serveNext(t, h, st.ContainerID)
+	st = waitState(t, h.reg, "a", store.StateReady)
+
+	// Ready for a minute: the next crash is a new incident and is retried.
+	h.clk.Advance(time.Minute)
+	h.eng.Exit(st.ContainerID, 1)
+	waitState(t, h.reg, "a", store.StateFailed)
+	if n := h.clk.Pending(); n != 1 {
+		t.Fatalf("after a stable Ready, %d retry timers pending, want 1", n)
+	}
+	h.clk.Advance(time.Second)
+	serveNext(t, h, st.ContainerID)
+	st = waitState(t, h.reg, "a", store.StateReady)
+
+	// A crash soon after recovering still counts against the budget.
+	h.clk.Advance(59 * time.Second)
+	h.eng.Exit(st.ContainerID, 1)
+	waitState(t, h.reg, "a", store.StateFailed)
+	if n := h.clk.Pending(); n != 0 {
+		t.Errorf("crash after %v of Ready: %d retry timers pending, want 0", 59*time.Second, n)
+	}
+}

@@ -103,6 +103,20 @@ you trust.
 The Go SDK's DNS-rebinding protection also stays on: a request that arrives on
 a loopback address with a non-loopback `Host` header is rejected.
 
+On top of that, MCP Machine checks the `Host` header of every browser request
+to the MCP routes (and of every browser state-changing UI request): it must be
+an IP address, `localhost`, MCP Machine's own host name, the host of
+`public_url`, or the host of an `allowed_origins` entry. Anything else gets 403
+`{"jsonrpc":"2.0","error":{"code":-32000,"message":"host not allowed"}}`. A
+DNS-rebinding page sends requests whose `Origin` matches their `Host`, so the
+origin check alone would let them through.
+
+A request counts as a browser's when it has an `Origin` header or any
+`Sec-Fetch-Site`/`Sec-Fetch-Mode`/`Sec-Fetch-Dest` header. So browser requests
+to a DNS name (`http://mcp.lan:8080/...`, a reverse proxy's name) must match
+`public_url` or `allowed_origins`; non-browser clients (CLIs, SDKs, `connect`,
+another container calling `http://mcp-machine:8080/...`) are unaffected.
+
 ## Checking from the command line
 
 ```sh

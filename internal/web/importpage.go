@@ -207,6 +207,9 @@ func (u *ui) importConfirm(w http.ResponseWriter, r *http.Request) {
 			failed = append(failed, s)
 		}
 	}
+	if len(failed) < len(specs) {
+		u.reloadAfterWrite()
+	}
 	if len(failed) == 0 {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return

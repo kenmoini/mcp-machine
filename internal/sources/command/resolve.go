@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -16,8 +17,56 @@ import (
 	"github.com/kenmoini/mcp-machine/internal/store"
 )
 
-// lookupEnv resolves pass-through environment variables; tests replace it.
+// lookupEnv resolves pass-through environment variables and ${VAR}
+// references; tests replace it.
 var lookupEnv = os.LookupEnv
+
+// envRef matches a ${VAR} reference, as the config loader does.
+var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// expander replaces ${VAR} references with lookupEnv values and remembers
+// the unset names, each once, in the order they are first seen.
+type expander struct {
+	missing []string
+	seen    map[string]bool
+}
+
+func (x *expander) expand(s string) string {
+	return envRef.ReplaceAllStringFunc(s, func(m string) string {
+		name := m[2 : len(m)-1]
+		if v, ok := lookupEnv(name); ok {
+			return v
+		}
+		if !x.seen[name] {
+			if x.seen == nil {
+				x.seen = map[string]bool{}
+			}
+			x.seen[name] = true
+			x.missing = append(x.missing, name)
+		}
+		return m
+	})
+}
+
+func (x *expander) expandAll(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	for i, s := range in {
+		out[i] = x.expand(s)
+	}
+	return out
+}
+
+// err reports every unset variable, or nil.
+func (x *expander) err() error {
+	errs := make([]error, len(x.missing))
+	for i, n := range x.missing {
+		errs[i] = fmt.Errorf("environment variable %s is not set", n)
+	}
+	return errors.Join(errs...)
+}
 
 // Resolve turns a command-type server spec into a container description.
 func Resolve(cfg *config.Config, spec config.ServerSpec) (sources.Resolved, error) {
@@ -34,6 +83,9 @@ func Resolve(cfg *config.Config, spec config.ServerSpec) (sources.Resolved, erro
 	for k, v := range spec.Command.Env {
 		cs.Env[k] = v
 	}
+	// ${VAR} in the run line's -e values and arguments, and in command.args,
+	// is expanded here: the config loader leaves those fields as written.
+	var x expander
 
 	if spec.Command.Run != "" {
 		run, err := dockerrun.Parse(spec.Command.Run)
@@ -41,12 +93,21 @@ func Resolve(cfg *config.Config, spec config.ServerSpec) (sources.Resolved, erro
 			return sources.Resolved{}, fmt.Errorf("parse run line: %w", err)
 		}
 		image = run.Image
-		cs.Command = run.Args
+		cs.Command = x.expandAll(run.Args)
 		cs.WorkDir = run.WorkDir
 		for k, v := range run.Env {
-			cs.Env[k] = v
+			cs.Env[k] = x.expand(v)
 		}
 		for _, name := range run.PassEnv {
+			// A bare -e NAME takes its value from command.env (already in
+			// cs.Env) or the server env (applied below), else the process
+			// environment.
+			if _, ok := spec.Command.Env[name]; ok {
+				continue
+			}
+			if _, ok := spec.Env[name]; ok {
+				continue
+			}
 			v, ok := lookupEnv(name)
 			if !ok {
 				return sources.Resolved{}, fmt.Errorf("environment variable %s is not set", name)
@@ -60,6 +121,7 @@ func Resolve(cfg *config.Config, spec config.ServerSpec) (sources.Resolved, erro
 			}
 			cs.Mounts = append(cs.Mounts, m)
 		}
+		cs.Mounts = append(cs.Mounts, run.Mounts...)
 		for _, p := range run.Ports {
 			pm, err := parsePort(p)
 			if err != nil {
@@ -76,10 +138,13 @@ func Resolve(cfg *config.Config, spec config.ServerSpec) (sources.Resolved, erro
 			return sources.Resolved{}, fmt.Errorf("unknown command %q; add it to runtimes", name)
 		}
 		image = cfg.Runtimes[name]
-		cs.Command = append([]string{name}, spec.Command.Args...)
+		cs.Command = append([]string{name}, x.expandAll(spec.Command.Args)...)
 		if m, ok := cacheMount(name); ok {
 			cs.Mounts = append(cs.Mounts, m)
 		}
+	}
+	if err := x.err(); err != nil {
+		return sources.Resolved{}, err
 	}
 
 	for k, v := range spec.Env {
@@ -124,20 +189,37 @@ func cacheMount(command string) (runtime.Mount, bool) {
 	return runtime.Mount{}, false
 }
 
-// parseVolume parses "src:dst[:ro]" into a bind mount.
+// parseVolume parses "src:dst[:opts]" into a mount. opts is a comma-separated
+// list of at most one of ro/rw and at most one of z/Z (SELinux relabeling,
+// shared or private). A src without a "/" names a volume; anything else is
+// a host path bind-mounted.
 func parseVolume(v string) (runtime.Mount, error) {
 	parts := strings.Split(v, ":")
 	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
-		return runtime.Mount{}, fmt.Errorf("invalid volume %q; want src:dst[:ro]", v)
+		return runtime.Mount{}, fmt.Errorf("invalid volume %q; want src:dst[:ro|rw][,z|Z]", v)
 	}
 	m := runtime.Mount{Type: "bind", Source: parts[0], Target: parts[1]}
+	if !strings.Contains(m.Source, "/") {
+		m.Type = "volume"
+	}
 	if len(parts) == 3 {
-		switch parts[2] {
-		case "ro":
-			m.ReadOnly = true
-		case "rw":
-		default:
-			return runtime.Mount{}, fmt.Errorf("invalid volume %q: unknown option %q", v, parts[2])
+		mode := false
+		for opt := range strings.SplitSeq(parts[2], ",") {
+			switch opt {
+			case "ro", "rw":
+				if mode {
+					return runtime.Mount{}, fmt.Errorf("invalid volume %q: more than one of ro and rw", v)
+				}
+				mode = true
+				m.ReadOnly = opt == "ro"
+			case "z", "Z":
+				if m.Relabel != "" {
+					return runtime.Mount{}, fmt.Errorf("invalid volume %q: more than one of z and Z", v)
+				}
+				m.Relabel = opt
+			default:
+				return runtime.Mount{}, fmt.Errorf("invalid volume %q: unknown option %q", v, opt)
+			}
 		}
 	}
 	return m, nil
@@ -169,6 +251,6 @@ func parsePort(p string) (runtime.PortMapping, error) {
 	return runtime.PortMapping{HostIP: ip, HostPort: host, ContainerPort: cont, Protocol: proto}, nil
 }
 
-// ParseVolume parses "src:dst[:ro]" into a bind mount. It is exported so other
-// resolvers apply the same volume syntax.
+// ParseVolume is parseVolume, exported so other resolvers apply the same
+// volume syntax.
 func ParseVolume(v string) (runtime.Mount, error) { return parseVolume(v) }

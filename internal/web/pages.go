@@ -8,12 +8,28 @@ import (
 )
 
 func (u *ui) index(w http.ResponseWriter, _ *http.Request) {
+	u.page(w, http.StatusOK, "index.html", "Dashboard", "dashboard", u.rows())
+}
+
+// rows is the dashboard table's data: every registered server.
+func (u *ui) rows() []rowView {
 	list := u.Registry.List()
 	rows := make([]rowView, len(list))
 	for i, st := range list {
 		rows[i] = rowView{serverView: u.serverView(st)}
 	}
-	u.page(w, http.StatusOK, "index.html", "Dashboard", "dashboard", rows)
+	return rows
+}
+
+// serverRows answers the dashboard's poll (?view=rows) with the whole table
+// body, so servers added or removed since the page loaded show up. /servers
+// is not a page of its own: anything else goes to the dashboard.
+func (u *ui) serverRows(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("view") != "rows" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	u.render(w, http.StatusOK, u.pages["index.html"], "_server_rows.html", u.rows())
 }
 
 // serverData is the detail page's content.
@@ -48,9 +64,17 @@ func (u *ui) serverPage(w http.ResponseWriter, r *http.Request) {
 
 // configData is the config page's content.
 type configData struct {
-	Config    *config.Config
-	Servers   []configServer
-	LastError string
+	Config     *config.Config
+	Registries []configRegistry
+	Servers    []configServer
+	LastError  string
+}
+
+// configRegistry is a registry as the config page shows it: the username as
+// written in the file (a ${VAR} stays a placeholder), never the password.
+type configRegistry struct {
+	Registry string
+	Username string
 }
 
 type configServer struct {
@@ -68,11 +92,32 @@ func (u *ui) configPage(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	if d.Config != nil {
+		d.Registries = u.rawRegistries(d.Config)
 		for _, s := range d.Config.Servers {
 			d.Servers = append(d.Servers, configServer{Name: s.Name, Type: s.Type, Enabled: s.IsEnabled()})
 		}
 	}
 	u.page(w, http.StatusOK, "config.html", "Config", "config", d)
+}
+
+// rawRegistries lists cfg's registries with their usernames as written in
+// the file. When the file cannot be read (or no longer matches cfg) the
+// usernames are left out rather than shown expanded.
+func (u *ui) rawRegistries(cfg *config.Config) []configRegistry {
+	out := make([]configRegistry, len(cfg.Registries))
+	for i, r := range cfg.Registries {
+		out[i].Registry = r.Registry
+	}
+	raw, err := u.Config.Raw()
+	if err != nil {
+		return out
+	}
+	for i := range out {
+		if i < len(raw.Registries) && raw.Registries[i].Registry == out[i].Registry {
+			out[i].Username = raw.Registries[i].Username
+		}
+	}
+	return out
 }
 
 func (u *ui) reload(w http.ResponseWriter, r *http.Request) {

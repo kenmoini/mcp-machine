@@ -218,3 +218,141 @@ func TestResolveNoCommand(t *testing.T) {
 		t.Fatal("want error for empty Command")
 	}
 }
+
+// fakeEnv replaces lookupEnv for the test with vars.
+func fakeEnv(t *testing.T, vars map[string]string) {
+	t.Helper()
+	old := lookupEnv
+	t.Cleanup(func() { lookupEnv = old })
+	lookupEnv = func(k string) (string, bool) {
+		v, ok := vars[k]
+		return v, ok
+	}
+}
+
+func TestResolveRunLineExpandsVars(t *testing.T) {
+	fakeEnv(t, map[string]string{"TOKEN": "s3cret", "ORG": "acme"})
+	spec := config.ServerSpec{Name: "r", Command: &config.CommandSpec{
+		Run: `docker run -i -e GITHUB_TOKEN=${TOKEN} -e LABEL="org-${ORG}" img --org ${ORG} --bare $ORG --quoted '${ORG}x'`,
+	}}
+	res, err := Resolve(testConfig(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"GITHUB_TOKEN": "s3cret", "LABEL": "org-acme"}; !reflect.DeepEqual(res.Container.Env, want) {
+		t.Fatalf("env = %v, want %v", res.Container.Env, want)
+	}
+	// The run line is parsed as a shell line: $ORG is a reference too, and
+	// reaches the resolver as ${ORG}.
+	if want := []string{"--org", "acme", "--bare", "acme", "--quoted", "acmex"}; !reflect.DeepEqual(res.Container.Command, want) {
+		t.Fatalf("command = %v, want %v", res.Container.Command, want)
+	}
+}
+
+func TestResolveRunLineMissingVars(t *testing.T) {
+	fakeEnv(t, map[string]string{})
+	spec := config.ServerSpec{Name: "r", Command: &config.CommandSpec{
+		Run: `docker run -i -e A=${ONE} img ${TWO} ${ONE}`,
+	}}
+	_, err := Resolve(testConfig(), spec)
+	if err == nil {
+		t.Fatal("want an error for unset variables")
+	}
+	for _, want := range []string{"environment variable ONE is not set", "environment variable TWO is not set"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want it to contain %q", err, want)
+		}
+	}
+	if n := strings.Count(err.Error(), "ONE"); n != 1 {
+		t.Errorf("ONE reported %d times, want once: %v", n, err)
+	}
+}
+
+func TestResolveCommandArgsExpandVars(t *testing.T) {
+	fakeEnv(t, map[string]string{"DB": "/data/db.sqlite"})
+	spec := config.ServerSpec{Name: "a", Command: &config.CommandSpec{Command: "uvx", Args: []string{"mcp-sqlite", "--db-path", "${DB}"}}}
+	res, err := Resolve(testConfig(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"uvx", "mcp-sqlite", "--db-path", "/data/db.sqlite"}; !reflect.DeepEqual(res.Container.Command, want) {
+		t.Fatalf("command = %v, want %v", res.Container.Command, want)
+	}
+
+	spec.Command.Args = []string{"${NOPE}"}
+	_, err = Resolve(testConfig(), spec)
+	if err == nil || !strings.Contains(err.Error(), "environment variable NOPE is not set") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestResolveRunLinePassEnvFromSpec(t *testing.T) {
+	// -e NAME takes its value from command.env or the server env before the
+	// process environment.
+	fakeEnv(t, map[string]string{"A": "process", "B": "process"})
+	spec := config.ServerSpec{
+		Name: "r",
+		Command: &config.CommandSpec{
+			Run: "docker run -i -e A -e B -e C img",
+			Env: map[string]string{"A": "command"},
+		},
+		Env: map[string]string{"C": "server"},
+	}
+	res, err := Resolve(testConfig(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"A": "command", "B": "process", "C": "server"}; !reflect.DeepEqual(res.Container.Env, want) {
+		t.Fatalf("env = %v, want %v", res.Container.Env, want)
+	}
+}
+
+func TestParseVolume(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want runtime.Mount
+	}{
+		{"/h:/c", runtime.Mount{Type: "bind", Source: "/h", Target: "/c"}},
+		{"/h:/c:ro", runtime.Mount{Type: "bind", Source: "/h", Target: "/c", ReadOnly: true}},
+		{"/h:/c:rw", runtime.Mount{Type: "bind", Source: "/h", Target: "/c"}},
+		{"/h:/c:z", runtime.Mount{Type: "bind", Source: "/h", Target: "/c", Relabel: "z"}},
+		{"/h:/c:Z", runtime.Mount{Type: "bind", Source: "/h", Target: "/c", Relabel: "Z"}},
+		{"/h:/c:ro,z", runtime.Mount{Type: "bind", Source: "/h", Target: "/c", ReadOnly: true, Relabel: "z"}},
+		{"/h:/c:Z,ro", runtime.Mount{Type: "bind", Source: "/h", Target: "/c", ReadOnly: true, Relabel: "Z"}},
+		{"./rel:/c", runtime.Mount{Type: "bind", Source: "./rel", Target: "/c"}},
+		{"data:/data", runtime.Mount{Type: "volume", Source: "data", Target: "/data"}},
+		{"data:/data:ro", runtime.Mount{Type: "volume", Source: "data", Target: "/data", ReadOnly: true}},
+	} {
+		got, err := ParseVolume(tc.in)
+		if err != nil {
+			t.Errorf("ParseVolume(%q): %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ParseVolume(%q) = %+v, want %+v", tc.in, got, tc.want)
+		}
+	}
+	for _, bad := range []string{"nocolon", ":/c", "/h:", "/h:/c:ro:z", "/h:/c:bogus", "/h:/c:ro,rw", "/h:/c:z,Z", "/h:/c:ro,"} {
+		if _, err := ParseVolume(bad); err == nil {
+			t.Errorf("ParseVolume(%q): want an error", bad)
+		}
+	}
+}
+
+func TestResolveRunLineMountsAndInit(t *testing.T) {
+	spec := config.ServerSpec{Name: "m", Command: &config.CommandSpec{
+		Run: "docker run -i --init -v /h:/c:ro,z -v cache:/cache --mount type=bind,src=/a,dst=/b,readonly img",
+	}}
+	res, err := Resolve(testConfig(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []runtime.Mount{
+		{Type: "bind", Source: "/h", Target: "/c", ReadOnly: true, Relabel: "z"},
+		{Type: "volume", Source: "cache", Target: "/cache"},
+		{Type: "bind", Source: "/a", Target: "/b", ReadOnly: true},
+	}
+	if !reflect.DeepEqual(res.Container.Mounts, want) {
+		t.Fatalf("mounts = %+v, want %+v", res.Container.Mounts, want)
+	}
+}

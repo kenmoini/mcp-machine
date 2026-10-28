@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
@@ -105,7 +107,15 @@ func headSHA(r *git.Repository) (string, error) {
 // AuthMethod builds the go-git auth method for repo from the configured
 // credentials. It returns nil for no credentials. A token needs an https
 // URL and an SSH key needs an SSH URL; a mismatch is an error.
+//
+// With an SSH key, the server's host key is checked against
+// known_hosts_file when it is set; otherwise go-git's default applies when
+// connecting: the files listed in SSH_KNOWN_HOSTS, else ~/.ssh/known_hosts
+// and /etc/ssh/ssh_known_hosts.
 func AuthMethod(repo string, a *config.GitAuth) (transport.AuthMethod, error) {
+	if a != nil && a.KnownHostsFile != "" && a.SSHKeyFile == "" {
+		return nil, errors.New("git auth: known_hosts_file requires ssh_key_file")
+	}
 	if a == nil || (a.Token == "" && a.SSHKeyFile == "") {
 		return nil, nil
 	}
@@ -125,7 +135,32 @@ func AuthMethod(repo string, a *config.GitAuth) (transport.AuthMethod, error) {
 	if err != nil {
 		return nil, fmt.Errorf("git auth: load ssh key %s: %w", a.SSHKeyFile, err)
 	}
+	if a.KnownHostsFile != "" {
+		db, err := gitssh.NewKnownHostsDb(a.KnownHostsFile)
+		if err != nil {
+			return nil, fmt.Errorf("git auth: load known_hosts_file %s: %w", a.KnownHostsFile, err)
+		}
+		keys.HostKeyCallback = db.HostKeyCallback()
+		// Offer only the key types known for this host, so the server
+		// does not pick one the file has no entry for.
+		if hp, err := sshHostPort(repo); err == nil {
+			keys.HostKeyAlgorithms = db.HostKeyAlgorithms(hp)
+		}
+	}
 	return keys, nil
+}
+
+// sshHostPort returns the host:port an SSH repo URL connects to.
+func sshHostPort(repo string) (string, error) {
+	ep, err := transport.NewEndpoint(repo)
+	if err != nil {
+		return "", err
+	}
+	port := ep.Port
+	if port == 0 {
+		port = 22
+	}
+	return net.JoinHostPort(ep.Host, strconv.Itoa(port)), nil
 }
 
 // isSSHURL reports whether u is an ssh:// URL or scp-style (user@host:path).

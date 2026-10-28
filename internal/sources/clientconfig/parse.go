@@ -109,6 +109,15 @@ func convert(name string, e entry) (config.ServerSpec, error) {
 		if e.Command == "" {
 			return config.ServerSpec{}, fmt.Errorf("type %q requires a command", e.Type)
 		}
+		if isContainerRun(e.Command, e.Args) {
+			// "docker run ..." is not a runtime command: keep it as a run
+			// line, which MCP Machine turns into the container itself.
+			return config.ServerSpec{
+				Name:    name,
+				Type:    "command",
+				Command: &config.CommandSpec{Run: shellJoin(append([]string{e.Command}, e.Args...)), Env: e.Env},
+			}, nil
+		}
 		return config.ServerSpec{
 			Name:    name,
 			Type:    "command",
@@ -134,6 +143,39 @@ func convert(name string, e entry) (config.ServerSpec, error) {
 	default:
 		return config.ServerSpec{}, fmt.Errorf("unknown type %q", e.Type)
 	}
+}
+
+// isContainerRun reports whether command and args are a docker or podman
+// run invocation.
+func isContainerRun(command string, args []string) bool {
+	return (command == "docker" || command == "podman") && len(args) > 0 && args[0] == "run"
+}
+
+// shellJoin joins words into a shell command line, single-quoting the words
+// that contain anything but plain characters.
+func shellJoin(words []string) string {
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = shellQuote(w)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuote(w string) string {
+	if w == "" {
+		return "''"
+	}
+	plain := true
+	for _, r := range w {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-.,/:=@%+", r)) {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return w
+	}
+	return "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
 }
 
 // SanitizeName lowercases s, replaces every run of characters outside

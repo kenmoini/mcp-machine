@@ -87,6 +87,9 @@ type BuildSpec struct {
 type GitAuth struct {
 	Token      string `yaml:"token,omitempty"`
 	SSHKeyFile string `yaml:"ssh_key_file,omitempty"`
+	// KnownHostsFile verifies the SSH server's host key. The json tag keeps
+	// it out of config.Hash while unset, so existing specs keep their hash.
+	KnownHostsFile string `yaml:"known_hosts_file,omitempty" json:",omitempty"`
 }
 
 // ServeSpec describes how a container exposes its MCP endpoint.

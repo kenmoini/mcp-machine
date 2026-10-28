@@ -117,3 +117,12 @@ func TestConnectUnreachableIsRuntimeError(t *testing.T) {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
 	}
 }
+
+func TestHelpPrintsUsageAndSucceeds(t *testing.T) {
+	for _, arg := range []string{"--help", "-h", "help"} {
+		code, out, errs := run(t, arg)
+		if code != 0 || !strings.Contains(out, "usage: mcp-machine") || !strings.Contains(out, "serve") || errs != "" {
+			t.Errorf("%s: code=%d out=%q err=%q", arg, code, out, errs)
+		}
+	}
+}

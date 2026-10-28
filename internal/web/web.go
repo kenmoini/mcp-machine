@@ -13,9 +13,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 
+	"github.com/kenmoini/mcp-machine/internal/adapters/httpadapter"
 	"github.com/kenmoini/mcp-machine/internal/config"
 	"github.com/kenmoini/mcp-machine/internal/proxy"
 	"github.com/kenmoini/mcp-machine/internal/runtime"
@@ -68,8 +70,14 @@ type Deps struct {
 	Config    ConfigView
 	Writer    ConfigWriter
 	PublicURL string
-	Version   string
-	Logger    *slog.Logger
+	// AllowedOrigins are the configured allowed_origins; with PublicURL they
+	// name the hosts state-changing requests may be addressed to.
+	AllowedOrigins []string
+	Version        string
+	Logger         *slog.Logger
+	// LookupEnv resolves the ${VAR} references of an edited spec, which must
+	// all be set for the written file to load. Nil means os.LookupEnv.
+	LookupEnv func(string) (string, bool)
 }
 
 const (
@@ -94,6 +102,9 @@ func New(d Deps) http.Handler {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
+	if d.LookupEnv == nil {
+		d.LookupEnv = os.LookupEnv
+	}
 	u := &ui{Deps: d, pages: map[string]*template.Template{}, frags: map[string]*template.Template{}}
 
 	base := func() *template.Template {
@@ -112,6 +123,7 @@ func New(d Deps) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", u.index)
+	mux.HandleFunc("GET /servers", u.serverRows)
 	mux.HandleFunc("GET /servers/{name}", u.serverPage)
 	mux.HandleFunc("GET /servers/{name}/status", u.status)
 	mux.HandleFunc("GET /servers/{name}/logs", u.logs)
@@ -129,7 +141,21 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /servers/{name}/edit", u.updateServer)
 	mux.HandleFunc("POST /servers/{name}/delete", u.deleteServer)
 	mux.Handle("GET /static/{file...}", staticHandler())
-	return u.sameOrigin(mux)
+	return u.guardHost(u.sameOrigin(mux))
+}
+
+// guardHost applies httpadapter.HostGuard to state-changing requests: a
+// DNS-rebinding page sends Origin and Host both naming its own host, which
+// sameOrigin accepts.
+func (u *ui) guardHost(next http.Handler) http.Handler {
+	guarded := httpadapter.HostGuard(httpadapter.Options{PublicURL: u.PublicURL, AllowedOrigins: u.AllowedOrigins})(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			next.ServeHTTP(w, r)
+			return
+		}
+		guarded.ServeHTTP(w, r)
+	})
 }
 
 // sameOrigin rejects state-changing requests whose Origin header names

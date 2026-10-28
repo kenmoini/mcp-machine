@@ -6,6 +6,8 @@
 # Rootless: install to ~/.config/containers/systemd/, change the socket Volume
 # below to  Volume=%t/podman/podman.sock:/run/podman/podman.sock  and run
 # systemctl --user enable --now podman.socket
+# and  sudo loginctl enable-linger $USER  so the user's units start at boot and
+# keep running after logout.
 #
 # /srv/mcp-machine must exist on the host and contain config.yaml.
 # Secrets referenced as ${VAR} in config.yaml can be supplied with

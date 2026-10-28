@@ -83,11 +83,20 @@ type fakeConfig struct {
 	rawErr   error
 	lastErr  error
 	reloaded bool
+	// onReload, if set, runs on Reload (the real one applies the config,
+	// which registers new servers).
+	onReload func()
 }
 
 func (c *fakeConfig) Current() *config.Config { return c.cfg }
 func (c *fakeConfig) LastError() error        { return c.lastErr }
-func (c *fakeConfig) Reload() error           { c.reloaded = true; return nil }
+func (c *fakeConfig) Reload() error {
+	c.reloaded = true
+	if c.onReload != nil {
+		c.onReload()
+	}
+	return nil
+}
 func (c *fakeConfig) Raw() (*config.Config, error) {
 	if c.rawErr != nil {
 		return nil, c.rawErr
@@ -153,18 +162,33 @@ func newEnv(t *testing.T) *env {
 		Manager: mgr, Registry: reg, Config: cfg, Writer: wr,
 		PublicURL: "http://mcp.lan:8080", Version: "test",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		// Every variable is set except those named UNSET*.
+		LookupEnv: func(name string) (string, bool) { return "x", !strings.HasPrefix(name, "UNSET") },
 	})
 	return &env{h: h, mgr: mgr, cfg: cfg, reg: reg, wr: wr}
 }
 
 func (e *env) do(method, target string, hdr ...string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, nil)
-	for i := 0; i+1 < len(hdr); i += 2 {
-		req.Header.Set(hdr[i], hdr[i+1])
-	}
+	setHeaders(req, hdr)
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
 	return rec
+}
+
+// testHost is the Host of test requests: the newEnv public_url host, which
+// the host guard accepts. A "Host" pair in hdr overrides it.
+const testHost = "mcp.lan:8080"
+
+func setHeaders(req *http.Request, hdr []string) {
+	req.Host = testHost
+	for i := 0; i+1 < len(hdr); i += 2 {
+		if http.CanonicalHeaderKey(hdr[i]) == "Host" {
+			req.Host = hdr[i+1]
+			continue
+		}
+		req.Header.Set(hdr[i], hdr[i+1])
+	}
 }
 
 func mustContain(t *testing.T, body string, subs ...string) {
@@ -419,7 +443,7 @@ func TestCrossOriginPostRefused(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status %d", rec.Code)
 	}
-	rec = e.do("POST", "/servers/alpha/actions/stop", "Origin", "http://example.com") // httptest host
+	rec = e.do("POST", "/servers/alpha/actions/stop", "Host", "192.168.1.5:8080", "Origin", "http://192.168.1.5:8080") // same origin
 	if rec.Code != 200 {
 		t.Errorf("same-origin status %d", rec.Code)
 	}
@@ -464,7 +488,9 @@ func TestPollingGoneServerDoesNotSwapErrorBody(t *testing.T) {
 func TestReloadWithoutConfigIs503(t *testing.T) {
 	h := web.New(web.Deps{Registry: store.NewRegistry()})
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("POST", "/config/reload", nil))
+	req := httptest.NewRequest("POST", "/config/reload", nil)
+	req.Host = "127.0.0.1:8080"
+	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status %d", rec.Code)
 	}
@@ -495,4 +521,114 @@ func TestNoSDKImportInWeb(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestDashboardPollsAllRowsAtOnce(t *testing.T) {
+	e := newEnv(t)
+	body := e.do("GET", "/").Body.String()
+	mustContain(t, body, `<tbody id="server-rows"`, `hx-get="/servers?view=rows"`)
+	if strings.Contains(body, "/status?view=row") {
+		t.Error("rows still poll one by one")
+	}
+
+	// A server registered after the page was rendered shows up in the next
+	// poll of the table body.
+	e.reg.Set(store.Status{Name: "gamma", State: store.StateDefined, Since: time.Now()})
+	rec := e.do("GET", "/servers?view=rows", "HX-Request", "true")
+	if rec.Code != 200 {
+		t.Fatalf("status %d", rec.Code)
+	}
+	rows := rec.Body.String()
+	mustContain(t, rows, `<tbody id="server-rows"`, `id="row-alpha"`, `id="row-beta"`, `id="row-gamma"`)
+	if strings.Contains(rows, "<html") {
+		t.Error("rows fragment wrapped in layout")
+	}
+
+	// Without servers the body says so.
+	for _, n := range []string{"alpha", "beta", "gamma"} {
+		e.reg.Delete(n)
+	}
+	mustContain(t, e.do("GET", "/servers?view=rows", "HX-Request", "true").Body.String(), "No servers configured.")
+
+	// /servers itself is not a page.
+	if rec := e.do("GET", "/servers"); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
+		t.Errorf("GET /servers: status %d loc %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestStateChangesRefuseUnknownHost(t *testing.T) {
+	// A DNS-rebinding page posts with Origin == Host == its own name, which
+	// the origin check accepts; the host guard does not.
+	e := newEnv(t)
+	for _, tc := range []struct{ method, path string }{
+		{"POST", "/servers/alpha/actions/stop"},
+		{"POST", "/config/reload"},
+		{"POST", "/servers/new"},
+		{"POST", "/servers/beta/delete"},
+	} {
+		rec := e.do(tc.method, tc.path, "Host", "rebind.evil.example:8080", "Origin", "http://rebind.evil.example:8080")
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "host not allowed") {
+			t.Errorf("%s %s: status %d body %q", tc.method, tc.path, rec.Code, rec.Body)
+		}
+	}
+	if len(e.mgr.calls) != 0 || len(e.wr.Deleted) != 0 || e.cfg.reloaded {
+		t.Errorf("state changed: calls %v deleted %v reloaded %v", e.mgr.calls, e.wr.Deleted, e.cfg.reloaded)
+	}
+
+	// Fetch metadata alone marks a browser request too.
+	rec := e.do("POST", "/servers/alpha/actions/stop", "Host", "rebind.evil.example:8080", "Sec-Fetch-Site", "same-origin")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("browser POST without Origin: status %d", rec.Code)
+	}
+
+	// Reads are not guarded; browser writes to IP literals, localhost and the
+	// public_url host are accepted.
+	if rec := e.do("GET", "/", "Host", "rebind.evil.example:8080", "Sec-Fetch-Site", "same-origin"); rec.Code != 200 {
+		t.Errorf("GET with unknown host: status %d", rec.Code)
+	}
+	for _, host := range []string{"127.0.0.1:8080", "localhost:8080", "mcp.lan:8080", "[::1]:8080"} {
+		if rec := e.do("POST", "/servers/alpha/actions/stop", "Host", host, "Sec-Fetch-Site", "same-origin"); rec.Code != 200 {
+			t.Errorf("browser POST with Host %s: status %d", host, rec.Code)
+		}
+	}
+
+	// Without Origin or fetch metadata (curl, scripts) Host is not checked.
+	if rec := e.do("POST", "/servers/alpha/actions/stop", "Host", "mcp-machine:8080"); rec.Code != 200 {
+		t.Errorf("non-browser POST to a container name: status %d", rec.Code)
+	}
+}
+
+func TestStateChangesAcceptAllowedOriginHost(t *testing.T) {
+	h := web.New(web.Deps{Registry: store.NewRegistry(), AllowedOrigins: []string{"http://tools.lan:9000"}})
+	req := httptest.NewRequest("POST", "/config/reload", nil)
+	req.Host = "tools.lan:8080"
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable { // past the guard: no config
+		t.Errorf("status %d", rec.Code)
+	}
+}
+
+func TestConfigPageShowsRawRegistryUsername(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.cfg.Registries = []config.Registry{{Registry: "ghcr.io", Username: "expanded-user", Password: "s3cret"}}
+	e.cfg.raw = &config.Config{Registries: []config.Registry{{Registry: "ghcr.io", Username: "${GHCR_USER}", Password: "${GHCR_TOKEN}"}}}
+	body := e.do("GET", "/config").Body.String()
+	mustContain(t, body, "ghcr.io", "${GHCR_USER}")
+	for _, leak := range []string{"expanded-user", "s3cret", "GHCR_TOKEN"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("config page shows %q", leak)
+		}
+	}
+}
+
+func TestServerPageShowsRunLine(t *testing.T) {
+	e := newEnv(t)
+	e.reg.Set(store.Status{Name: "gh", State: store.StateReady})
+	e.cfg.cfg.Servers = append(e.cfg.cfg.Servers, config.ServerSpec{Name: "gh", Type: "command", Command: &config.CommandSpec{
+		Run: "docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server",
+	}})
+	body := e.do("GET", "/servers/gh").Body.String()
+	mustContain(t, body, "<dt>Source</dt>", "docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server")
 }

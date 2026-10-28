@@ -3,7 +3,7 @@
 # environment at load time; every field shown here is optional unless noted.
 
 listen: ":8080"
-public_url: "http://mcp.lan:8080"      # used in connect snippets + default allowed origin
+public_url: "http://mcp.lan:8080"      # used in connect snippets + default allowed origin; set it when browsers use a DNS name
 tls: { cert_file: "", key_file: "" }   # both or neither
 podman:
   socket: "unix:///run/podman/podman.sock"   # env MCP_MACHINE_PODMAN_SOCKET overrides
@@ -38,7 +38,7 @@ servers:
       args: ["-y", "@modelcontextprotocol/server-filesystem", "/projects"]
       env: { LOG_LEVEL: debug }
     container:                         # optional overrides on the generated spec
-      volumes: ["/srv/projects:/projects:ro"]
+      volumes: ["/srv/projects:/projects:ro"]   # add ",z" on SELinux hosts: /srv/projects:/projects:ro,z
       image: docker.io/library/node:20
 
   - name: fetch
@@ -54,7 +54,7 @@ servers:
       subdir: server
       containerfile: Containerfile
       args: { NODE_ENV: production }
-      auth: { token: "${GITHUB_TOKEN}" }   # or ssh_key_file: /data/keys/id_ed25519
+      auth: { token: "${GITHUB_TOKEN}" }   # or ssh_key_file: /data/keys/id_ed25519 + known_hosts_file: /data/keys/known_hosts
     serve: { mode: http, port: 3000, path: /mcp, transport: http }   # mode stdio (default) | http
     env: { PORT: "3000" }
     enabled: true

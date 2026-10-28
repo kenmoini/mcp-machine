@@ -55,9 +55,13 @@ type PortMapping struct {
 // Mount describes a bind or volume mount.
 type Mount struct {
 	Type     string // "bind" | "volume"
-	Source   string
+	Source   string // host path (bind) or volume name (volume)
 	Target   string
 	ReadOnly bool
+	// Relabel asks the engine to relabel the content for SELinux: "z"
+	// (shared between containers), "Z" (private to this container) or ""
+	// (leave the label alone).
+	Relabel string
 }
 
 // ContainerInfo is the observable state of a container.

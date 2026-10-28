@@ -16,8 +16,8 @@
 </dl></div>
 
 <h2>Registries</h2>
-{{if .Registries}}<table><thead><tr><th>Registry</th><th>Username</th></tr></thead><tbody>
-{{range .Registries}}<tr><td class="mono">{{.Registry}}</td><td>{{.Username}}</td></tr>
+{{if $.Registries}}<table><thead><tr><th>Registry</th><th>Username</th></tr></thead><tbody>
+{{range $.Registries}}<tr><td class="mono">{{.Registry}}</td><td class="mono">{{if .Username}}{{.Username}}{{else}}-{{end}}</td></tr>
 {{end}}</tbody></table>{{else}}<p class="empty">None configured.</p>{{end}}
 
 <h2>Runtimes</h2>

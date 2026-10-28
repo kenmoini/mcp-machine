@@ -93,6 +93,13 @@ func summarize(s config.ServerSpec, cfg *config.Config) specView {
 		if s.Build.Subdir != "" {
 			v.Source += " /" + s.Build.Subdir
 		}
+	case s.Command != nil && s.Command.Run != "":
+		// command.run is never expanded by the loader: ${VAR}s show as
+		// written.
+		v.Source = s.Command.Run
+		if s.Container != nil && s.Container.Image != "" {
+			v.Source += " (image " + s.Container.Image + ")"
+		}
 	case s.Command != nil:
 		v.Source = s.Command.Command
 		if img := s.RuntimeImage(cfg); img != "" {

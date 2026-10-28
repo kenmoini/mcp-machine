@@ -46,15 +46,19 @@ func toSpecGen(s runtime.ContainerSpec) *specgen.SpecGenerator {
 		if m.ReadOnly {
 			mode = "ro"
 		}
+		opts := []string{mode}
+		if m.Relabel != "" {
+			opts = append(opts, m.Relabel)
+		}
 		switch m.Type {
 		case "volume":
-			g.Volumes = append(g.Volumes, &specgen.NamedVolume{Name: m.Source, Dest: m.Target, Options: []string{mode}})
+			g.Volumes = append(g.Volumes, &specgen.NamedVolume{Name: m.Source, Dest: m.Target, Options: opts})
 		default:
 			g.Mounts = append(g.Mounts, spec.Mount{
 				Type:        "bind",
 				Source:      m.Source,
 				Destination: m.Target,
-				Options:     []string{"rbind", mode},
+				Options:     append([]string{"rbind"}, opts...),
 			})
 		}
 	}

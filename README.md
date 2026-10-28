@@ -36,7 +36,9 @@ sudo podman run -d --name mcp-machine \
   ghcr.io/kenmoini/mcp-machine:latest
 ```
 
-Open <http://localhost:8080>. The sibling network (`mcp-machine`) is joined automatically, so no `--network` flag is needed. Pass secrets that `config.yaml` references as `${VAR}` with `-e NAME` (see [docs/config.md](docs/config.md)).
+Open <http://localhost:8080>. The sibling network (`mcp-machine`) is joined automatically, so no `--network` flag is needed. Pass secrets that `config.yaml` references as `${VAR}` with `-e NAME` (see [docs/config.md](docs/config.md)). If you browse to MCP Machine by a DNS name rather than an IP address or `localhost`, set `public_url` to that address (see [Connecting clients](#connecting-clients)).
+
+On an SELinux host, a host path mounted into a server container (like `/srv/projects` above) must be labeled for containers: write the volume as `/srv/projects:/projects:ro,z` (or `:Z` for a path only that server uses). MCP Machine's own container runs with `label=disable`, which does not extend to the containers it starts. See [Volumes](docs/config.md#volumes).
 
 ### Compose
 
@@ -56,11 +58,12 @@ sudo make quadlet-install      # copies the units to /etc/containers/systemd and
 sudo systemctl start mcp-machine
 ```
 
-For a rootless setup, install into your user directory and edit the socket volume in the installed `mcp-machine.container` to `Volume=%t/podman/podman.sock:/run/podman/podman.sock`, then enable the user socket and start the unit:
+For a rootless setup, install into your user directory and edit the socket volume in the installed `mcp-machine.container` to `Volume=%t/podman/podman.sock:/run/podman/podman.sock`, then enable the user socket and start the unit. Enable lingering for the user so the user manager (and with it the socket, MCP Machine and its servers) starts at boot and keeps running after you log out:
 
 ```sh
 make quadlet-install QUADLET_DIR=$HOME/.config/containers/systemd SYSTEMCTL="systemctl --user"
 # edit the Volume= line for the socket in $HOME/.config/containers/systemd/mcp-machine.container
+sudo loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 systemctl --user daemon-reload
 systemctl --user start mcp-machine
@@ -122,14 +125,16 @@ claude mcp add --transport http filesystem http://mcp.lan:8080/servers/filesyste
 
 For stdio-only clients use `mcp-machine connect <url>` or `npx mcp-remote <url>`. Details, including origin settings for browser-based clients, are in [docs/clients.md](docs/clients.md).
 
+To block DNS-rebinding attacks from web pages, MCP Machine only answers browser requests (those carrying `Origin` or `Sec-Fetch-*` headers) to the MCP routes, and browser UI changes, when they are addressed to an IP address, `localhost`, its own host name, the host of `public_url`, or a host in `allowed_origins`. **Browser requests to a DNS name such as `mcp.lan` must match `public_url` (`public_url: "http://mcp.lan:8080"`) or `allowed_origins`**, otherwise they get `403 host not allowed`. Non-browser clients (Claude Code, SDKs, `curl`, `mcp-machine connect`, other containers) are unaffected.
+
 ## The web UI
 
-- **Dashboard** (`/`): every server with a state badge, type, image, time in state, restart count, and Start, Stop, Restart, Resync, Remove, and (for build servers) Rebuild actions. Rows refresh every two seconds.
+- **Dashboard** (`/`): every server with a state badge, type, image, time in state, restart count, and Start, Stop, Restart, Resync, Remove, and (for build servers) Rebuild actions. The table refreshes every two seconds, so servers added or removed elsewhere show up; it pauses while an action error is shown (click the error to dismiss it).
 - **Server page** (`/servers/NAME`): status, the tools, resources, and prompts the server exposes, live container logs, and copy-ready connect commands.
-- **Add, edit, delete, import**: forms for each server type write the entry into `config.yaml` (comments and order are kept). **Import** takes pasted `mcpServers` client JSON or a `docker run` line, shows a preview, and adds the servers.
+- **Add, edit, delete, import**: forms for each server type write the entry into `config.yaml` (comments and order are kept) and apply it at once. **Import** takes pasted `mcpServers` client JSON or a `docker run` line, shows a preview, and adds the servers; a client entry whose command is `docker run ...` or `podman run ...` becomes a `command.run` line.
 - **Config** (`/config`): the loaded settings, the last reload error if any, and a Reload now button.
 
-`mcp-machine import <file|->` prints the same client-JSON conversion as YAML on the command line, and `mcp-machine validate -c config.yaml` checks a file.
+`mcp-machine import <file|->` prints the same client-JSON conversion as YAML on the command line, and `mcp-machine validate -c config.yaml` checks a file. `mcp-machine help` (or `-h`, `--help`) lists the commands.
 
 ## Configuration
 
@@ -147,8 +152,8 @@ One YAML file, `/data/config.yaml` in the container, hot-reloaded when it change
 | `make fmt`, `make fmt-check` | Format with gofmt, or fail if anything needs formatting. |
 | `make run` | Build and run `serve` (reads `/data/config.yaml`; for another file run `./bin/mcp-machine serve -c config.yaml`). |
 | `make validate` | Build and run `validate` (reads `/data/config.yaml` unless you run the binary with `-c`). |
-| `make image` | Build `$(IMAGE):$(TAG)` with `$(ENGINE)` from the `Containerfile` (defaults: `ghcr.io/kenmoini/mcp-machine`, `podman`, the git description). |
-| `make push` | Build and push the image. |
+| `make image` | Build `$(IMAGE):$(TAG)` with `$(ENGINE)` from the `Containerfile` and also tag it `$(IMAGE):latest`, the tag `compose.yaml`, the Quadlet unit and the commands above run (defaults: `ghcr.io/kenmoini/mcp-machine`, `podman`, the git description). |
+| `make push` | Build and push `$(IMAGE):$(TAG)` (not `:latest`). |
 | `make compose-up`, `make compose-down` | Start or stop the Compose deployment. |
 | `make quadlet-install` | Copy the Quadlet units to `$(QUADLET_DIR)` (default `/etc/containers/systemd`) and run `$(SYSTEMCTL) daemon-reload`. |
 | `make htmx-vendor` | Re-download and checksum-verify the vendored htmx 2.0.10. |
@@ -169,7 +174,7 @@ Unit tests never touch a socket; they use an in-memory fake engine. Integration 
 MCP_MACHINE_PODMAN_SOCKET=unix:///run/podman/podman.sock make test-integration
 ```
 
-With `podman machine` (macOS), use the socket path printed by `podman machine inspect`. The UI is `html/template` with one vendored htmx file; there is no JavaScript build step.
+With `podman machine` (macOS), use the socket path printed by `podman machine inspect`. The config watcher may not see edits made on the macOS side of a `podman machine` bind mount (virtiofs does not always deliver inotify events); press **Reload now** on the Config page after editing the file. The UI is `html/template` with one vendored htmx file; there is no JavaScript build step.
 
 ## Limitations
 
@@ -180,7 +185,9 @@ With `podman machine` (macOS), use the socket path printed by `podman machine in
 - Podman only (4.x, 5.x, 6.x API). No Kubernetes, Docker Desktop, or Windows.
 - A stdio container cannot be safely re-attached, so stdio containers are restarted when MCP Machine restarts. http-mode containers are adopted in place.
 - Host paths in `container.volumes` and in `docker run -v` lines resolve on the Podman host, not inside the MCP Machine container.
-- Hot reload needs the config file inside a bind-mounted directory; single-file mounts and named volumes are not supported for reload.
+- Hot reload needs the config file inside a bind-mounted directory; single-file mounts and named volumes are not supported for reload. Under `podman machine` (macOS) file changes made on the host may not be noticed; use Reload now.
+- On SELinux hosts, host paths mounted into server containers need `:z`/`:Z` (or a container label) to be readable there.
+- Browser requests to the MCP routes and browser UI changes accept only IP addresses, `localhost`, MCP Machine's own host name, and the `public_url`/`allowed_origins` hosts in the `Host` header; set `public_url` when browsing by a DNS name. Non-browser clients are unaffected.
 
 ## License
 

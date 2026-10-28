@@ -10,6 +10,8 @@ import (
 
 	"mvdan.cc/sh/v3/shell"
 	"mvdan.cc/sh/v3/syntax"
+
+	"github.com/kenmoini/mcp-machine/internal/runtime"
 )
 
 // Spec is the supported subset of a docker/podman run command line.
@@ -19,6 +21,7 @@ type Spec struct {
 	Env         map[string]string
 	PassEnv     []string
 	Volumes     []string
+	Mounts      []runtime.Mount // from --mount
 	Ports       []string
 	Name        string
 	Network     string
@@ -173,11 +176,14 @@ func Parse(line string) (spec Spec, err error) {
 			s.Interactive = true
 		case "--rm":
 			s.Remove = true
+		case "--init":
+			// MCP Machine runs the image's own entrypoint; an init process
+			// changes nothing it relies on.
 		case "-it", "-ti", "-t", "--tty":
 			return Spec{}, errors.New("tty is not supported")
 		case "--env-file":
 			return Spec{}, errors.New("unsupported flag --env-file")
-		case "-e", "--env", "-v", "--volume", "-p", "--publish", "--name", "--network", "-w", "--workdir":
+		case "-e", "--env", "-v", "--volume", "--mount", "-p", "--publish", "--name", "--network", "-w", "--workdir":
 			if !hasVal {
 				if i >= len(toks) {
 					return Spec{}, fmt.Errorf("flag %s requires a value", flag)
@@ -224,6 +230,12 @@ func (s *Spec) setValue(flag, val string) error {
 		s.Env[k] = v
 	case "-v", "--volume":
 		s.Volumes = append(s.Volumes, val)
+	case "--mount":
+		m, err := parseMount(val)
+		if err != nil {
+			return err
+		}
+		s.Mounts = append(s.Mounts, m)
 	case "-p", "--publish":
 		s.Ports = append(s.Ports, val)
 	case "--name":
@@ -234,4 +246,55 @@ func (s *Spec) setValue(flag, val string) error {
 		s.WorkDir = val
 	}
 	return nil
+}
+
+// parseMount parses a --mount value: comma-separated key=value pairs with
+// type (bind or volume; default volume), source/src, target/destination/dst,
+// readonly/ro (bare, or =true/false/1/0) and relabel (shared → z, private →
+// Z). Other keys and mount types are rejected.
+func parseMount(val string) (runtime.Mount, error) {
+	m := runtime.Mount{Type: "volume"}
+	for field := range strings.SplitSeq(val, ",") {
+		k, v, hasVal := strings.Cut(field, "=")
+		switch k {
+		case "type":
+			if v != "bind" && v != "volume" {
+				return runtime.Mount{}, fmt.Errorf("--mount %q: unsupported mount type %q", val, v)
+			}
+			m.Type = v
+		case "source", "src":
+			m.Source = v
+		case "target", "destination", "dst":
+			m.Target = v
+		case "readonly", "ro":
+			switch {
+			case !hasVal, v == "true", v == "1":
+				m.ReadOnly = true
+			case v == "false", v == "0":
+				m.ReadOnly = false
+			default:
+				return runtime.Mount{}, fmt.Errorf("--mount %q: invalid readonly value %q", val, v)
+			}
+		case "relabel":
+			switch v {
+			case "shared":
+				m.Relabel = "z"
+			case "private":
+				m.Relabel = "Z"
+			default:
+				return runtime.Mount{}, fmt.Errorf("--mount %q: invalid relabel value %q; want shared or private", val, v)
+			}
+		default:
+			return runtime.Mount{}, fmt.Errorf("--mount %q: unsupported mount option %q", val, k)
+		}
+	}
+	if m.Target == "" {
+		return runtime.Mount{}, fmt.Errorf("--mount %q: target is required", val)
+	}
+	if m.Source == "" {
+		// An anonymous volume would be a new, empty volume on every
+		// container: nothing MCP Machine could keep.
+		return runtime.Mount{}, fmt.Errorf("--mount %q: source is required", val)
+	}
+	return m, nil
 }

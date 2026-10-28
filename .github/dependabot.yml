@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 50
+
+  # Package updates
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 50
+
+  # Docker updates
+  - package-ecosystem: "docker"
+    directory: "/agent"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 50

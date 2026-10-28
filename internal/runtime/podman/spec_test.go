@@ -81,3 +81,24 @@ func TestLabelFilter(t *testing.T) {
 		t.Fatalf("nil labels: got %v", got)
 	}
 }
+
+func TestToSpecGenRelabel(t *testing.T) {
+	g := toSpecGen(runtime.ContainerSpec{Image: "img", Mounts: []runtime.Mount{
+		{Type: "bind", Source: "/h", Target: "/c", ReadOnly: true, Relabel: "z"},
+		{Type: "bind", Source: "/p", Target: "/p", Relabel: "Z"},
+		{Type: "volume", Source: "vol", Target: "/v", Relabel: "z"},
+		{Type: "bind", Source: "/n", Target: "/n"},
+	}})
+	if want := []string{"rbind", "ro", "z"}; !reflect.DeepEqual(g.Mounts[0].Options, want) {
+		t.Errorf("mount0 options = %v, want %v", g.Mounts[0].Options, want)
+	}
+	if want := []string{"rbind", "rw", "Z"}; !reflect.DeepEqual(g.Mounts[1].Options, want) {
+		t.Errorf("mount1 options = %v, want %v", g.Mounts[1].Options, want)
+	}
+	if want := []string{"rbind", "rw"}; !reflect.DeepEqual(g.Mounts[2].Options, want) {
+		t.Errorf("mount2 options = %v, want %v", g.Mounts[2].Options, want)
+	}
+	if want := []string{"rw", "z"}; !reflect.DeepEqual(g.Volumes[0].Options, want) {
+		t.Errorf("volume options = %v, want %v", g.Volumes[0].Options, want)
+	}
+}

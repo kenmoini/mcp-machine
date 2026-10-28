@@ -534,3 +534,22 @@ func TestFakeConnectNetworkShowsInInspectAndList(t *testing.T) {
 		t.Fatalf("List = %+v, err %v", list, err)
 	}
 }
+
+func TestFakeKeepsSpecMounts(t *testing.T) {
+	e := fake.New()
+	mounts := []runtime.Mount{
+		{Type: "bind", Source: "/h", Target: "/c", ReadOnly: true, Relabel: "z"},
+		{Type: "volume", Source: "data", Target: "/data", Relabel: "Z"},
+	}
+	id, err := e.CreateContainer(context.Background(), runtime.ContainerSpec{Name: "a", Image: "img", Mounts: mounts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := e.Spec(id)
+	if !ok || !slices.Equal(spec.Mounts, mounts) {
+		t.Fatalf("Spec(%s) = %+v, %v; want mounts %+v", id, spec.Mounts, ok, mounts)
+	}
+	if _, ok := e.Spec("nope"); ok {
+		t.Error("Spec of an unknown container")
+	}
+}

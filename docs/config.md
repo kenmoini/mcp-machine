@@ -17,14 +17,14 @@ mcp-machine validate -c config.yaml      # prints "ok" or every problem found
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `listen` | string | `:8080` | Address the HTTP server binds. The `--listen` flag of `serve` overrides it. |
-| `public_url` | string | empty | Externally visible base URL, for example `http://mcp.lan:8080`. Must be absolute. Used in the connect snippets shown in the UI, and its origin is always an allowed origin. |
+| `public_url` | string | empty | Externally visible base URL, for example `http://mcp.lan:8080`. Must be absolute. Used in the connect snippets shown in the UI, and its origin is always an allowed origin. **Required when browsers reach MCP Machine by a DNS name**: browser requests to the MCP routes and the UI's state-changing requests must name a `Host` that is an IP address, `localhost`, MCP Machine's own host name, the `public_url` host, or an `allowed_origins` host (see [Host check](#host-check)). Non-browser clients are unaffected. |
 | `tls.cert_file`, `tls.key_file` | string | empty | PEM certificate and key. Both or neither; when both are set the server listens on TLS only. |
 | `podman.socket` | string | `unix:///run/podman/podman.sock` | Podman API endpoint. Must start with `unix://` or `tcp://`. The environment variable `MCP_MACHINE_PODMAN_SOCKET`, when set and non-empty, overrides it. |
 | `podman.network` | string | `mcp-machine` | User-defined network the managed containers join (created if missing). |
 | `podman.stop_timeout` | duration | `10s` | Grace period when stopping a container. Minimum `1s`. Go duration syntax (`10s`, `1m`). |
 | `workspace_dir` | string | `<data_dir>/workspace` | Where `build` servers are cloned. Must be an absolute path. |
 | `data_dir` | string | `/data` | Data directory. |
-| `allowed_origins` | list of strings | `[]` | Extra trusted origins for cross-origin requests to the MCP routes, each an absolute origin such as `http://mcp.lan:8080`. |
+| `allowed_origins` | list of strings | `[]` | Extra trusted origins for cross-origin requests to the MCP routes, each an absolute origin such as `http://mcp.lan:8080`. Their host names are also accepted by the [host check](#host-check). |
 | `registries` | list | `[]` | Credentials for private image registries (below). |
 | `runtimes` | map | see below | Image used for each `command.command` value. |
 | `log.level` | string | `info` | `debug`, `info`, `warn`, or `error`. An unrecognized value falls back to `info`. |
@@ -91,10 +91,10 @@ A container generated from a client-style command. Exactly one of `command` or
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `command` | string | | One of the keys of `runtimes` (`npx`, `node`, `uvx`, `python`, or one you add). |
-| `args` | list of strings | empty | Arguments passed after the command. |
+| `command` | string | | One of the keys of `runtimes` (`npx`, `node`, `uvx`, `python`, or one you add). Any other value is a validation error (`command.command "docker" is not a configured runtime`); to run an image directly, use `run`. |
+| `args` | list of strings | empty | Arguments passed after the command. `${VAR}` allowed. |
 | `env` | map of strings | empty | Environment variables. `${VAR}` allowed. |
-| `run` | string | | A `docker run` or `podman run` line. Supported: the image and its arguments, `-i`, `--rm`, `-e/--env` (`-e NAME` without a value passes MCP Machine's own variable through), `-v/--volume`, `-p/--publish`, `--name`, `--network`, `-w/--workdir`. `-t`, `--env-file`, and any other flag are rejected. Shell expansion other than plain `$NAME` is rejected. |
+| `run` | string | | A `docker run` or `podman run` line. Supported: the image and its arguments, `-i`, `--rm`, `--init` (accepted and ignored), `-e/--env`, `-v/--volume` (see [Volumes](#volumes)), `--mount` (`type=bind` or `type=volume`, with `source`/`src`, `target`/`destination`/`dst`, `readonly`/`ro`, and `relabel=shared\|private`), `-p/--publish`, `--name`, `--network`, `-w/--workdir`. `-t`, `--env-file`, and any other flag are rejected. Shell expansion other than plain `$NAME` / `${NAME}` is rejected. `${VAR}` in `-e` values and in the image arguments is expanded (see below). `-e NAME` without a value takes `NAME` from `command.env`, then the server's `env`, then MCP Machine's own environment. |
 
 Command servers always speak MCP over the container's stdin and stdout.
 
@@ -110,7 +110,17 @@ An image built from a git repository, then run as a container.
 | `containerfile` | string | `Containerfile` | Path of the Containerfile relative to `subdir`. |
 | `args` | map of strings | empty | Build arguments. `${VAR}` allowed. |
 | `auth.token` | string | | Token for an `https://` repository (sent as basic auth). `${VAR}` allowed. |
-| `auth.ssh_key_file` | string | | Path to a private key for an SSH repository. Set only one of `token` and `ssh_key_file`. |
+| `auth.ssh_key_file` | string | | Path (inside the MCP Machine container) to a private key for an SSH repository. Set only one of `token` and `ssh_key_file`. |
+| `auth.known_hosts_file` | string | | Path (inside the MCP Machine container) to an OpenSSH `known_hosts` file used to verify the SSH server's host key. Only with `ssh_key_file`. |
+
+The MCP Machine image ships no `known_hosts`, so an SSH build needs one: mount
+a file that holds the host's key (for example the output of
+`ssh-keyscan github.com`) into the container and set `auth.known_hosts_file`
+to its path, for example `/data/keys/known_hosts` when it sits next to
+`config.yaml`. Without `known_hosts_file`, the host key is checked against the
+files named in the `SSH_KNOWN_HOSTS` environment variable (colon-separated),
+else `~/.ssh/known_hosts` and `/etc/ssh/ssh_known_hosts`, which do not exist in
+the image: set `SSH_KNOWN_HOSTS` on the MCP Machine container in that case.
 
 The image is tagged `localhost/mcp-machine/<name>:<sha7>`. The clone is redone
 whenever the build step runs, so a moving `ref` such as `main` is re-resolved
@@ -130,30 +140,66 @@ An http-mode container is probed (up to 60 seconds) until its endpoint answers,
 then connected to over the shared network (or `127.0.0.1` when MCP Machine runs
 as a bare binary).
 
+MCP Machine knows it runs in a container when `/run/.containerenv` exists. To
+join the shared network it needs its own container ID: Podman writes it into
+that file only for `--privileged` containers, so otherwise MCP Machine looks up
+its host name (the short container ID unless `--hostname` is set) through the
+Podman API. If that fails too, set `MCP_MACHINE_CONTAINER_ID` to the
+container's name or ID (for example `-e MCP_MACHINE_CONTAINER_ID=mcp-machine`).
+When the ID cannot be found MCP Machine logs a warning and carries on without
+joining, and http-mode servers are then unreachable unless MCP Machine's
+container is already on `podman.network`.
+
 ### container
 
 | Field | Type | Meaning |
 |---|---|---|
 | `image` | string | Replaces the runtime image of a `command` server. |
-| `volumes` | list of strings | Bind mounts as `src:dst` or `src:dst:ro` (`rw` is accepted). The source is a path on the **Podman host**, not inside the MCP Machine container. |
+| `volumes` | list of strings | Mounts as `src:dst[:options]` (see [Volumes](#volumes)). |
 | `env` | map of strings | Extra environment variables. `${VAR}` allowed. |
+
+### Volumes
+
+`container.volumes` entries and `-v` in a `run` line use the same syntax,
+`src:dst[:options]`:
+
+- a `src` containing a `/` is a path on the **Podman host** (not inside the
+  MCP Machine container) and is bind-mounted; a `src` without a `/` (for
+  example `data:/data`) is a named Podman volume;
+- `options` is a comma-separated list of at most one of `ro`/`rw` and at most
+  one of `z`/`Z`, for example `/srv/projects:/projects:ro,z`.
+
+**SELinux.** On an SELinux host (Fedora, RHEL, CentOS Stream) a host path
+mounted into a server container is unreadable there until it is labeled for
+containers. Add `:z` (content shared between containers) or `:Z` (private to
+this one container) and Podman relabels it, or label the directory yourself
+(`chcon -Rt container_file_t PATH`). `:Z` on a directory used by other
+containers or by the host breaks their access. MCP Machine's own container
+runs with `label=disable` (`--security-opt label=disable`,
+`SecurityLabelDisable=true`) so it can use the Podman socket and its data
+directory; that does not extend to the server containers it starts.
 
 ## Environment variable expansion
 
 `${NAME}` (letters, digits, underscore; not starting with a digit) is replaced
-from MCP Machine's own environment when the file is loaded. Only these fields
-are expanded: `registries[].username` and `password`; each server's `env`;
+from MCP Machine's own environment when the file is loaded. These fields are
+expanded: `registries[].username` and `password`; each server's `env`;
 `remote.headers`; `command.env`; `container.env`; `build.args`;
-`build.auth.token`. Other fields (URLs, paths, `command.run`, `args`) are used
-as written.
+`build.auth.token`. `command.run` (its `-e` values and image arguments) and
+`command.args` are expanded too, when the container is created; the loaded
+configuration keeps them as written. Other fields (URLs, paths, volumes) are
+used as written.
 
-A `${NAME}` that is not set is an error that names the variable, and the file
-is rejected (at startup, or on reload, which keeps the previous configuration).
-Supply the variables with `podman run -e NAME`, an `environment:` block in
-`compose.yaml`, or `EnvironmentFile=` in the Quadlet unit.
+A `${NAME}` that is not set, in any of these fields, is an error that names
+the variable, and the file is rejected (at startup, or on reload, which keeps
+the previous configuration). Supply the variables with `podman run -e NAME`, an
+`environment:` block in `compose.yaml`, or `EnvironmentFile=` in the Quadlet
+unit.
 
 The UI never shows resolved secrets, and the forms keep `${VAR}` references
-verbatim.
+verbatim. A form (add, edit, or import) that references a variable MCP
+Machine's environment does not set is refused with `environment variable NAME
+is not set`, so the UI never writes a file the next start would reject.
 
 ## Hot reload
 
@@ -169,6 +215,12 @@ The config file must live in a **directory** that is bind-mounted at `/data`.
 A bind mount of the single file, or a named volume, does not deliver reliable
 change events and is not supported for hot reload.
 
+With `podman machine` (macOS, Windows) the bind mount crosses into the VM
+through virtiofs, which may not deliver inotify events for edits made on the
+host, so the watcher can miss them. Use the Config page's **Reload now**
+button (or `curl -X POST http://HOST:8080/config/reload`) after editing the
+file there. Edits made through the UI are applied at once either way.
+
 Not everything is hot. `listen`, `tls`, `public_url`, `allowed_origins`,
 `podman.socket`, `workspace_dir`, and `log` are read once at startup: restart
 the container to change them. So are the `registries` credentials used for the
@@ -177,18 +229,42 @@ base images of `build` servers. Server definitions, `runtimes`,
 applied on reload; `podman.network` applies to containers created after the
 reload.
 
+## Host check
+
+Browser requests to the MCP routes (`/servers/NAME/mcp` and
+`/servers/NAME/sse`) and browser state-changing UI requests (POST) have their
+`Host` header checked against a list, to defeat DNS rebinding: a hostile web
+page whose name resolves to your MCP Machine sends requests whose `Origin` and
+`Host` both carry the page's own name, which an origin check alone would
+accept. Accepted are IP addresses (with or without a port), `localhost`, MCP
+Machine's own host name, the host of `public_url`, and the hosts of
+`allowed_origins`; ports are not compared. Anything else gets 403
+`{"jsonrpc":"2.0","error":{"code":-32000,"message":"host not allowed"}}`.
+
+A request counts as a browser's when it carries an `Origin` header or any
+fetch-metadata header (`Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`),
+which every current browser sends. Non-browser clients (MCP SDKs, `curl`,
+`mcp-machine connect`, a sidecar calling `http://mcp-machine:8080/...`) send
+none of them and are unaffected, whatever host name they use.
+
+So browser requests to a DNS name (`mcp.lan`, a reverse proxy's name) must
+match `public_url` or `allowed_origins`: set `public_url` to that name, or list
+further names in `allowed_origins`. Reading UI pages is not affected.
+
 ## Write-back from the UI
 
 Adding, editing, importing, and deleting servers in the UI edits the YAML file
 in place. The file is processed as a `yaml.v3` node tree, so comments, key
 order, quoting style, and `${VAR}` references elsewhere in the file survive.
-A change is validated in memory first and written atomically (a temp file,
-then a rename); the reload this triggers is harmless because reconciling is
-hash-based.
+A change is validated in memory first and written atomically (a uniquely
+named temp file in the same directory, then a rename, then a sync of the
+directory); writes from concurrent requests are serialized. The UI applies the
+new file before it redirects, so the page you land on already shows the
+change; the watcher's own reload that follows is harmless because reconciling
+is hash-based.
 
 An edit merges into the existing entry: keys you did not change keep their
-comments and quoting. Be aware that the first UI save of a server may add keys
-that the form fills with defaults (for example `transport: auto` on a remote
-server, `containerfile: Containerfile` on a build server, or `serve: {mode:
-stdio}`), which can change the spec hash and recreate that server's container
-once.
+comments and quoting. The edit forms leave fields empty when the file relies on
+a default (for example `transport: auto` on a remote server, `containerfile:
+Containerfile` on a build server, or `serve: {mode: stdio}`), so saving a
+server does not add those keys.

@@ -1,8 +1,9 @@
-<tr id="row-{{.Name}}"{{if not .ActionError}} hx-get="/servers/{{.Name}}/status?view=row" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+<tr id="row-{{.Name}}">
   <td><a href="/servers/{{.Name}}">{{.Name}}</a></td>
   <td>{{.Type}}</td>
   <td><span class="badge {{.State}}">{{.State}}</span>{{if .Paused}} <span class="tag">paused</span>{{end}}
-    {{if or .ActionError .Error}}<div class="err">{{if .ActionError}}{{.ActionError}}{{else}}{{.Error}}{{end}}</div>{{end}}</td>
+    {{if .ActionError}}<div class="err" data-action-error title="Click to dismiss" hx-on:click="this.remove()">{{.ActionError}}</div>
+    {{- else if .Error}}<div class="err">{{.Error}}</div>{{end}}</td>
   <td class="mono">{{.Image}}</td>
   <td>{{since .Since}}</td>
   <td>{{.Restarts}}</td>

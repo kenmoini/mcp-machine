@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kenmoini/mcp-machine/internal/runtime"
 	"github.com/kenmoini/mcp-machine/internal/sources/dockerrun"
 )
 
@@ -207,4 +208,62 @@ func FuzzParse(f *testing.F) {
 	f.Fuzz(func(t *testing.T, line string) {
 		_, _ = dockerrun.Parse(line)
 	})
+}
+
+func TestParseInitAndMount(t *testing.T) {
+	tests := []struct {
+		name, line string
+		want       []runtime.Mount
+		wantErr    string
+	}{
+		{name: "init ignored", line: `docker run -i --init img`},
+		{name: "init with value ignored", line: `docker run --init=true img`},
+		{
+			name: "bind mount",
+			line: `docker run --mount type=bind,source=/h,target=/c,readonly img`,
+			want: []runtime.Mount{{Type: "bind", Source: "/h", Target: "/c", ReadOnly: true}},
+		},
+		{
+			name: "bind mount short keys joined",
+			line: `docker run --mount=type=bind,src=/h,dst=/c img`,
+			want: []runtime.Mount{{Type: "bind", Source: "/h", Target: "/c"}},
+		},
+		{
+			name: "volume mount with readonly value and relabel",
+			line: `podman run --mount type=volume,source=data,destination=/data,ro=true,relabel=private --mount type=bind,src=/a,target=/b,readonly=false,relabel=shared img`,
+			want: []runtime.Mount{
+				{Type: "volume", Source: "data", Target: "/data", ReadOnly: true, Relabel: "Z"},
+				{Type: "bind", Source: "/a", Target: "/b", Relabel: "z"},
+			},
+		},
+		{
+			name: "type defaults to volume",
+			line: `docker run --mount source=data,target=/data img`,
+			want: []runtime.Mount{{Type: "volume", Source: "data", Target: "/data"}},
+		},
+		{name: "tmpfs unsupported", line: `docker run --mount type=tmpfs,target=/t img`, wantErr: `unsupported mount type "tmpfs"`},
+		{name: "missing target", line: `docker run --mount type=bind,source=/h img`, wantErr: "target"},
+		{name: "bind needs source", line: `docker run --mount type=bind,target=/c img`, wantErr: "source"},
+		{name: "unknown key", line: `docker run --mount type=bind,source=/h,target=/c,bind-propagation=rshared img`, wantErr: `unsupported mount option "bind-propagation"`},
+		{name: "bad readonly", line: `docker run --mount type=bind,source=/h,target=/c,readonly=maybe img`, wantErr: "readonly"},
+		{name: "bad relabel", line: `docker run --mount type=bind,source=/h,target=/c,relabel=z img`, wantErr: "relabel"},
+		{name: "mount without value", line: `docker run --mount`, wantErr: "flag --mount requires a value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := dockerrun.Parse(tt.line)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err=%v want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Image != "img" || !reflect.DeepEqual(got.Mounts, tt.want) {
+				t.Fatalf("got image %q mounts %+v, want %+v", got.Image, got.Mounts, tt.want)
+			}
+		})
+	}
 }

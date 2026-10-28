@@ -1,0 +1,10 @@
+{{/* The dashboard's table body. It polls itself as a whole, so servers added
+     or removed elsewhere appear and disappear. Polling pauses while a row
+     shows an action error (click the error to dismiss it). */}}
+<tbody id="server-rows" hx-get="/servers?view=rows" hx-trigger="every 2s [!document.querySelector('#server-rows [data-action-error]')]" hx-swap="outerHTML">
+{{- range .}}
+{{template "_server_row.html" .}}
+{{- else}}
+  <tr><td colspan="7" class="empty">No servers configured.</td></tr>
+{{- end}}
+</tbody>

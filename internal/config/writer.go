@@ -5,14 +5,22 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
 
+// editMu serializes every Writer edit in the process: an edit is a
+// read-modify-write of the whole file, and two interleaved ones would lose
+// one of the changes.
+var editMu sync.Mutex
+
 // Writer edits the servers list of a config file in place. It works on the
 // YAML node tree, so comments, key order, quoting and ${VAR} placeholders in
 // the rest of the file survive an edit. Each edit is validated before it
-// touches disk and is written atomically (temp file plus rename).
+// touches disk and is written atomically (temp file plus rename). Edits are
+// serialized process-wide, whichever Writer value makes them.
 type Writer struct{ Path string }
 
 // AddServer appends s to the servers list. It is an error if a server with the
@@ -75,6 +83,9 @@ func acceptAll(string) (string, bool) { return "x", true }
 // edit reads the file, applies fn to its servers sequence, validates the
 // result and atomically replaces the file.
 func (w Writer) edit(fn func(seq *yaml.Node) error) error {
+	editMu.Lock()
+	defer editMu.Unlock()
+
 	fi, err := os.Stat(w.Path)
 	if err != nil {
 		return fmt.Errorf("config: stat %s: %w", w.Path, err)
@@ -247,14 +258,16 @@ func specNode(s ServerSpec) (*yaml.Node, error) {
 	return doc.Content[0], nil
 }
 
-// writeAtomic writes data to path+".tmp" with the given mode and renames it
-// over path. The temp file is removed on failure.
+// writeAtomic writes data to a fresh temp file next to path with the given
+// mode, renames it over path and syncs the directory so the rename survives
+// a crash. The temp file is removed on failure.
 func writeAtomic(path string, data []byte, mode os.FileMode) (err error) {
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".config-*.tmp")
 	if err != nil {
-		return fmt.Errorf("config: write %s: %w", tmp, err)
+		return fmt.Errorf("config: write temp file in %s: %w", dir, err)
 	}
+	tmp := f.Name()
 	defer func() {
 		if err != nil {
 			_ = os.Remove(tmp)
@@ -277,6 +290,12 @@ func writeAtomic(path string, data []byte, mode os.FileMode) (err error) {
 	}
 	if err = os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("config: rename %s: %w", tmp, err)
+	}
+	// The file is in place; failing to sync the directory only weakens
+	// durability, so it is not reported as a failed write.
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }

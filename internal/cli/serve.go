@@ -54,6 +54,23 @@ type serveDeps struct {
 // It is a variable so tests can point it elsewhere.
 var containerenvPath = "/run/.containerenv"
 
+// detectSelf reports whether MCP Machine runs in a container and, if so, its
+// container ID, which the manager needs to join the servers' network. When
+// the ID cannot be determined it logs a warning and returns "": serve goes on
+// without the self-join.
+func detectSelf(ctx context.Context, engine runtime.Engine, logger *slog.Logger) (inContainer bool, selfID string) {
+	hint, inContainer := runtime.DetectSelf(containerenvPath)
+	if !inContainer {
+		return false, ""
+	}
+	id, err := runtime.ResolveSelfID(ctx, engine, hint)
+	if err != nil {
+		logger.Warn("running in a container but its ID is unknown; not joining the servers' network, so http-mode servers may be unreachable (set "+runtime.SelfIDEnv+")", "err", err)
+		return true, ""
+	}
+	return true, id
+}
+
 const (
 	applyBackoffMin = time.Second
 	applyBackoffMax = 30 * time.Second
@@ -65,7 +82,7 @@ const (
 // serve context; the goroutines and every Apply use it, never a request
 // context. deps.close stops them and the manager.
 func newManager(ctx context.Context, path string, cfg *config.Config, engine runtime.Engine, logger *slog.Logger) (serveDeps, error) {
-	selfID, inContainer := runtime.DetectSelf(containerenvPath)
+	inContainer, selfID := detectSelf(ctx, engine, logger)
 	reg := store.NewRegistry()
 	builder := &build.Builder{
 		Workspace:  cfg.WorkspaceDir,
@@ -237,6 +254,30 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts
 	}
 	logger := newLogger(stderr, cfg.Log)
 
+	// TLS and the listener come first: if either fails, nothing has been
+	// started (no engine connection, no containers).
+	var tlsConfig *tls.Config
+	scheme := "http"
+	if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+		if err != nil {
+			return fail(fmt.Errorf("load TLS key pair: %w", err))
+		}
+		tlsConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+		scheme = "https"
+	}
+	ln, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return fail(err)
+	}
+	// srv.Serve closes ln once it runs; until then every exit closes it.
+	serving := false
+	defer func() {
+		if !serving {
+			_ = ln.Close()
+		}
+	}()
+
 	newEngine := opts.NewEngine
 	if newEngine == nil {
 		newEngine = func(ctx context.Context, socket string) (runtime.Engine, error) {
@@ -266,38 +307,23 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts
 	// The UI owns everything else. It is mounted last: the adapters' more
 	// specific /servers/{name}/mcp and /sse patterns win over its "/".
 	mux.Handle("/", web.New(web.Deps{
-		Manager:   deps.mgr,
-		Registry:  deps.reg,
-		Config:    deps.state,
-		Writer:    config.Writer{Path: *path},
-		PublicURL: cfg.PublicURL,
-		Version:   buildinfo.Version,
-		Logger:    logger,
+		Manager:        deps.mgr,
+		Registry:       deps.reg,
+		Config:         deps.state,
+		Writer:         config.Writer{Path: *path},
+		PublicURL:      cfg.PublicURL,
+		AllowedOrigins: cfg.AllowedOrigins,
+		Version:        buildinfo.Version,
+		Logger:         logger,
 	}))
 
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: readHeaderTimeout}
-	useTLS := cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != ""
-	scheme := "http"
-	if useTLS {
-		// Load the key pair before listening so a bad path fails before
-		// "listening on" is printed.
-		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
-		if err != nil {
-			return fail(fmt.Errorf("load TLS key pair: %w", err))
-		}
-		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
-		scheme = "https"
-	}
-
-	ln, err := net.Listen("tcp", cfg.Listen)
-	if err != nil {
-		return fail(err)
-	}
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: readHeaderTimeout, TLSConfig: tlsConfig}
 	fmt.Fprintf(stdout, "listening on %s://%s\n", scheme, ln.Addr())
 
+	serving = true
 	errCh := make(chan error, 1)
 	go func() {
-		if useTLS {
+		if tlsConfig != nil {
 			errCh <- srv.ServeTLS(ln, "", "")
 		} else {
 			errCh <- srv.Serve(ln)

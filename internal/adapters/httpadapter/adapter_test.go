@@ -68,6 +68,14 @@ func newServer(t *testing.T, opts httpadapter.Options) *httptest.Server {
 	return srv
 }
 
+// localRequest is an in-process request addressed to 127.0.0.1, a Host the
+// host guard accepts (httptest's default, example.com, is refused).
+func localRequest(method, target, body string) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Host = "127.0.0.1:8080"
+	return req
+}
+
 const initBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"raw","version":"1"}}}`
 
 // rawPost sends an initialize request with extra headers and returns the response.
@@ -233,7 +241,7 @@ func TestSSEUnknownServerIs404(t *testing.T) {
 	mux := newMux(t, httpadapter.Options{})
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
 		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(method, "/servers/nope/sse", strings.NewReader(initBody)))
+		mux.ServeHTTP(rec, localRequest(method, "/servers/nope/sse", initBody))
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s status = %d, want 404", method, rec.Code)
 		}
@@ -245,7 +253,7 @@ func TestSSEUnknownServerIs404(t *testing.T) {
 
 func TestSSECrossOriginDenied(t *testing.T) {
 	mux := newMux(t, httpadapter.Options{})
-	req := httptest.NewRequest(http.MethodPost, "/servers/demo/sse?sessionid=x", strings.NewReader(initBody))
+	req := localRequest(http.MethodPost, "/servers/demo/sse?sessionid=x", initBody)
 	for k, v := range evilHeaders {
 		req.Header.Set(k, v)
 	}
@@ -259,7 +267,7 @@ func TestSSECrossOriginDenied(t *testing.T) {
 func TestSSEUnknownSessionIsRejected(t *testing.T) {
 	mux := newMux(t, httpadapter.Options{})
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/servers/demo/sse?sessionid=bogus", strings.NewReader(initBody)))
+	mux.ServeHTTP(rec, localRequest(http.MethodPost, "/servers/demo/sse?sessionid=bogus", initBody))
 	if rec.Code < 400 || rec.Code > 499 || rec.Code == http.StatusForbidden {
 		t.Fatalf("status = %d, want 4xx from the SSE handler (not 403/404-unknown-server body)", rec.Code)
 	}

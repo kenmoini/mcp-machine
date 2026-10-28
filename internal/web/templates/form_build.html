@@ -32,6 +32,10 @@
     <label for="f-build-ssh">SSH key file</label>
     <input id="f-build-ssh" name="build.auth.ssh_key_file" value="{{.V "build.auth.ssh_key_file"}}" placeholder="/run/secrets/id_ed25519">
   </div>
+  <div class="field">
+    <label for="f-build-known-hosts">SSH known_hosts file</label>
+    <input id="f-build-known-hosts" name="build.auth.known_hosts_file" value="{{.V "build.auth.known_hosts_file"}}" placeholder="/data/keys/known_hosts">
+  </div>
 </fieldset>
 {{template "_form_serve.html" .}}
 {{template "_form_tail.html" .}}
