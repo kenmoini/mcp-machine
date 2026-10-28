@@ -43,7 +43,7 @@ func mustLoad(t *testing.T, l config.Layout) *config.Set {
 }
 
 func serverNames(c *config.Config) []string {
-	var names []string
+	names := make([]string, 0, len(c.Servers))
 	for _, s := range c.Servers {
 		names = append(names, s.Name)
 	}

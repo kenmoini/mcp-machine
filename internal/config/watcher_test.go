@@ -296,7 +296,9 @@ func TestWatcherImportBurstReloadsOnce(t *testing.T) {
 	go func() { done <- w.Run(ctx) }()
 	defer func() {
 		cancel()
-		<-done
+		if err := <-done; err != nil {
+			t.Errorf("Run returned %v after cancel, want nil", err)
+		}
 	}()
 
 	for _, name := range []string{"a", "b", "c", "d", "e"} {
@@ -385,4 +387,25 @@ func TestWatcherSharedParentStaysWatched(t *testing.T) {
 	if got := serverNames(s.Config); len(got) != 1 || got[0] != "x" {
 		t.Errorf("servers = %v, want [x]", got)
 	}
+}
+
+// A UI write (temp file plus rename into the user drop-in directory)
+// produces exactly one reload: the hidden temp file is ignored.
+func TestDirWriterTriggersSingleWatcherCallback(t *testing.T) {
+	l := layoutDir(t, map[string]string{"config.yaml": validYAML})
+	mkdir(t, l.UserDir)
+	h := startLayoutWatcher(t, l)
+	spec := config.ServerSpec{
+		Name:   "delta",
+		Type:   "remote",
+		Remote: &config.RemoteSpec{URL: "https://delta.example.com/mcp", Transport: "http"},
+	}
+	if err := (config.DirWriter{Dir: l.UserDir, Layout: l}).AddServer(spec); err != nil {
+		t.Fatal(err)
+	}
+	c := h.expectChange(t).Config
+	if len(c.Servers) != 1 || c.Servers[0].Name != "delta" {
+		t.Errorf("servers = %+v", c.Servers)
+	}
+	h.expectNoChange(t)
 }

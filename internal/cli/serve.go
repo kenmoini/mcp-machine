@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -310,7 +311,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts
 		Manager:        deps.mgr,
 		Registry:       deps.reg,
 		Config:         deps.state,
-		Writer:         config.Writer{Path: *path},
+		Writer:         config.DirWriter{Dir: filepath.Join(filepath.Dir(*path), "config.d"), Layout: config.Layout{BaseFile: *path}},
 		PublicURL:      cfg.PublicURL,
 		AllowedOrigins: cfg.AllowedOrigins,
 		Version:        buildinfo.Version,
