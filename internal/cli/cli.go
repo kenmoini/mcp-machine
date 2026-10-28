@@ -52,8 +52,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case "validate":
 		return runValidate(args[1:], stdout, stderr)
 	case "import":
-		fmt.Fprintf(stderr, "mcp-machine %s: not implemented\n", cmd)
-		return exitRuntime
+		return runImport(args[1:], stdin, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "mcp-machine: unknown command %q\n", cmd)
 		usage(stderr)

@@ -2,6 +2,8 @@ package cli_test
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -44,15 +46,59 @@ func TestNoArgsIsUsageError(t *testing.T) {
 	}
 }
 
-func TestStubCommandsNotImplemented(t *testing.T) {
-	for _, cmd := range []string{"import"} {
-		t.Run(cmd, func(t *testing.T) {
-			code, out, errs := run(t, cmd)
-			want := "mcp-machine " + cmd + ": not implemented\n"
-			if code != 1 || errs != want || out != "" {
-				t.Fatalf("code=%d out=%q err=%q want err=%q", code, out, errs, want)
-			}
-		})
+const importFixture = `{"mcpServers":{"airtable":{"command":"npx","args":["-y","airtable-mcp-server"],"env":{"K":"${AIRTABLE_API_KEY}"}}}}`
+
+// importGolden is the full yaml.v3 default encoder output, which indents
+// sequences under a mapping key by four spaces and nested maps by four.
+const importGolden = "servers:\n" +
+	"    - name: airtable\n" +
+	"      type: command\n" +
+	"      command:\n" +
+	"        command: npx\n" +
+	"        args:\n" +
+	"            - -y\n" +
+	"            - airtable-mcp-server\n" +
+	"        env:\n" +
+	"            K: ${AIRTABLE_API_KEY}\n"
+
+func TestImportCommandPrintsYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".mcp.json")
+	if err := os.WriteFile(path, []byte(importFixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run(t, "import", path)
+	if code != 0 || errs != "" || out != importGolden {
+		t.Fatalf("code=%d err=%q out=%q want %q", code, errs, out, importGolden)
+	}
+}
+
+func TestImportReadsStdin(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := cli.Main([]string{"import", "-"}, strings.NewReader(importFixture), &out, &errb)
+	if code != 0 || errb.String() != "" || out.String() != importGolden {
+		t.Fatalf("code=%d err=%q out=%q", code, errb.String(), out.String())
+	}
+}
+
+func TestImportUsageError(t *testing.T) {
+	for _, args := range [][]string{{"import"}, {"import", "a", "b"}} {
+		code, out, errs := run(t, args...)
+		if code != 2 || out != "" || !strings.Contains(errs, "usage: mcp-machine import <file|->") {
+			t.Fatalf("args=%v code=%d out=%q err=%q", args, code, out, errs)
+		}
+	}
+}
+
+func TestImportErrorsAreRuntimeErrors(t *testing.T) {
+	bad := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(bad, []byte(`{"mcpServers":{"x":{"type":"nope","url":"u"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{bad, filepath.Join(t.TempDir(), "missing.json")} {
+		code, out, errs := run(t, "import", path)
+		if code != 1 || out != "" || !strings.HasPrefix(errs, "mcp-machine import: ") {
+			t.Fatalf("path=%s code=%d out=%q err=%q", path, code, out, errs)
+		}
 	}
 }
 
