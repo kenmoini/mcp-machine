@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"sync"
 	"time"
 
@@ -31,6 +32,7 @@ const (
 	evRestart
 	evRemove
 	evRebuild
+	evDisable     // enabled: false in the config: stop without pausing
 	evShutdown    // manager closing: drop the session, leave the container
 	evExit        // the container of generation gen exited with code
 	evSessionLost // the session of generation gen ended
@@ -42,7 +44,7 @@ const (
 // behind it.
 func (k evKind) preempts() bool {
 	switch k {
-	case evStop, evRestart, evRemove, evRebuild, evShutdown:
+	case evStop, evRestart, evRemove, evRebuild, evDisable, evShutdown:
 		return true
 	}
 	return false
@@ -74,6 +76,8 @@ type runner struct {
 	pending       int                // preempting commands sent but not yet handled
 	busy          bool               // an event or retry is being handled (a pipeline may be running)
 	attemptCancel context.CancelFunc // cancels the current attempt's context
+	removals      int                // Remove calls queued or being handled
+	removalIdle   chan struct{}      // closed when removals drops to 0; nil until someone waits
 
 	// Owned by the runner goroutine.
 	status   store.Status
@@ -148,6 +152,40 @@ func (r *runner) interrupted() bool {
 	return r.pending > 0
 }
 
+// beginRemoval records a Remove about to be sent. It is ended by the runner
+// exiting (a successful removal), or by endRemoval when the removal fails or
+// is never queued.
+func (r *runner) beginRemoval() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.removals++
+}
+
+func (r *runner) endRemoval() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.removals--
+	if r.removals == 0 && r.removalIdle != nil {
+		close(r.removalIdle)
+		r.removalIdle = nil
+	}
+}
+
+// removalPending reports whether a Remove is queued or in progress and, if
+// so, returns a channel closed when none is (the runner may exit instead:
+// watch done too).
+func (r *runner) removalPending() (<-chan struct{}, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.removals == 0 {
+		return nil, false
+	}
+	if r.removalIdle == nil {
+		r.removalIdle = make(chan struct{})
+	}
+	return r.removalIdle, true
+}
+
 // post delivers an event without ever blocking the runner: it waits for room
 // in the channel or for the runner to end, so nothing is dropped or leaked.
 func (r *runner) post(ev event) {
@@ -196,6 +234,9 @@ func (r *runner) send(ctx context.Context, kind evKind) error {
 // interrupt may already have cancelled an attempt, so the runner is asked to
 // resume it.
 func (r *runner) withdraw(kind evKind) {
+	if kind == evRemove {
+		r.endRemoval()
+	}
 	if !kind.preempts() {
 		return
 	}
@@ -266,8 +307,20 @@ func (r *runner) handle(ev event) bool {
 		} else {
 			r.recoverAbandoned() // rejected: nothing settled the interrupted attempt
 		}
+	case evDisable:
+		if r.status.State == store.StateStopped {
+			// Already stopped (paused by the user): only the flag changes.
+			r.status.Paused = false
+			r.m.reg.Set(r.status)
+			reply(ev, nil)
+			break
+		}
+		reply(ev, r.stop(false))
 	case evRemove:
 		err := r.remove()
+		if err != nil {
+			r.endRemoval() // the runner lives on
+		}
 		reply(ev, err)
 		return err == nil
 	case evShutdown:
@@ -383,8 +436,12 @@ func (r *runner) start() {
 		r.m.reg.Set(r.status)
 		return
 	case store.StateStopped:
-		if r.canResume() {
+		if info, ok := r.resumable(); ok {
 			ctx := r.beginAttempt()
+			if info.Labels[store.LabelTransport] == "http" {
+				r.resumeHTTP(ctx, info.State == "running")
+				return
+			}
 			r.set(store.StateCreating, "")
 			r.attachAndStart(ctx)
 			return
@@ -393,17 +450,18 @@ func (r *runner) start() {
 	r.launch(false)
 }
 
-// canResume reports whether the stopped container still exists and was
-// created for the current spec.
-func (r *runner) canResume() bool {
+// resumable reports whether the stopped container still exists and was
+// created for the current spec, and returns its current state. A container
+// adopted by Apply is resumed the same way.
+func (r *runner) resumable() (runtime.ContainerInfo, bool) {
 	if r.status.ContainerID == "" {
-		return false
+		return runtime.ContainerInfo{}, false
 	}
 	info, err := r.m.engine.InspectContainer(r.ctx, r.status.ContainerID)
 	if err != nil {
-		return false
+		return runtime.ContainerInfo{}, false
 	}
-	return info.Labels[store.LabelHash] == r.hash
+	return info, info.Labels[store.LabelHash] == r.hash
 }
 
 // retry runs after a backoff: from Creating when the image is known,
@@ -418,8 +476,8 @@ func (r *runner) retry() {
 	r.launch(false)
 }
 
-// launch runs the whole pipeline: Resolve → image → create → attach → start
-// → dial → bind.
+// launch runs the whole pipeline: Resolve → image → create → start → dial →
+// bind (a remote server: Resolve → dial → bind).
 func (r *runner) launch(forceBuild bool) {
 	ctx := r.beginAttempt()
 	r.set(store.StateResolving, "")
@@ -431,10 +489,18 @@ func (r *runner) launch(forceBuild bool) {
 	r.provision(ctx, res, forceBuild)
 }
 
-// provision makes the image available and creates the container.
+// provision connects a remote server, or makes the image available and
+// creates the container.
 func (r *runner) provision(ctx context.Context, res sources.Resolved, forceBuild bool) {
-	// Task 27 adds the http-mode and remote paths here.
-	if res.Kind != sources.KindContainer || res.Container == nil || res.Transport != "stdio" {
+	switch {
+	case res.Kind == sources.KindRemote && res.Remote != nil:
+		r.resolved = &res
+		r.image = ""
+		r.connectRemote(ctx)
+		return
+	case res.Kind == sources.KindContainer && res.Container != nil &&
+		(res.Transport == "stdio" || (res.Transport == "http" && res.HTTP != nil)):
+	default:
 		r.failAttempt(ctx, fmt.Errorf("manager: unsupported server (kind %d, transport %q)", res.Kind, res.Transport))
 		return
 	}
@@ -449,6 +515,78 @@ func (r *runner) provision(ctx context.Context, res sources.Resolved, forceBuild
 	r.status.Image = image
 	r.set(store.StateImageReady, "")
 	r.create(ctx)
+}
+
+// create replaces any previous container with a fresh one and starts it.
+func (r *runner) create(ctx context.Context) {
+	r.set(store.StateCreating, "")
+	if err := r.discardContainer(ctx); err != nil {
+		r.failAttempt(ctx, err)
+		return
+	}
+	cfg := r.m.config()
+	if cfg.Podman.Network != "" {
+		if err := r.m.engine.EnsureNetwork(ctx, cfg.Podman.Network); err != nil {
+			r.failAttempt(ctx, fmt.Errorf("ensure network %s: %w", cfg.Podman.Network, err))
+			return
+		}
+	}
+	transport := r.resolved.Transport
+	spec := *r.resolved.Container
+	if spec.Name == "" {
+		spec.Name = store.ContainerName(r.name)
+	}
+	if spec.Network == "" {
+		spec.Network = cfg.Podman.Network
+	}
+	spec.Image = r.image
+	labels := maps.Clone(spec.Labels)
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	maps.Copy(labels, store.Labels(r.name, r.hash, transport))
+	spec.Labels = labels
+	spec.Stdin = transport == "stdio"
+	if transport == "http" {
+		spec.Ports = httpPorts(spec.Ports, r.resolved.HTTP.Port, r.m.opts.InContainer)
+	}
+	id, err := r.m.engine.CreateContainer(ctx, spec)
+	if err != nil {
+		r.failAttempt(ctx, fmt.Errorf("create container: %w", err))
+		return
+	}
+	r.status.ContainerID = id
+	if transport == "http" {
+		r.startHTTP(ctx, false)
+		return
+	}
+	r.attachAndStart(ctx)
+}
+
+// bindSession watches sess for loss and binds the facade to it: the last
+// step of every start path.
+func (r *runner) bindSession(ctx context.Context, sess *mcp.ClientSession, gen uint64) {
+	r.sess = sess
+	go func() {
+		_ = sess.Wait()
+		r.post(event{kind: evSessionLost, gen: gen})
+	}()
+	err := r.facade.Bind(ctx, sess)
+	if ctx.Err() != nil {
+		r.failAttempt(ctx, ctx.Err()) // interrupted: the preempting command decides
+		return
+	}
+	if err != nil {
+		if exitErr := r.exitedError(); exitErr != nil {
+			err = exitErr
+		} else {
+			err = fmt.Errorf("bind: %w", err)
+		}
+		r.failAttempt(ctx, err)
+		return
+	}
+	r.abandoned = false
+	r.set(store.StateReady, "")
 }
 
 // ensureImage builds the image when the server has a build plan, otherwise
@@ -531,7 +669,7 @@ func (r *runner) onSessionLost(ev event) {
 		return
 	}
 	r.fail(errors.New("backend session closed"))
-	r.awaitExit = true
+	r.awaitExit = r.status.ContainerID != ""
 }
 
 // stop drops the session and stops the container, keeping it.

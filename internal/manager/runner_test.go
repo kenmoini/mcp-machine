@@ -23,7 +23,8 @@ import (
 
 // --- helpers ---------------------------------------------------------------
 
-// stubResolver returns a copy of res (or err) for every server.
+// stubResolver returns a copy of res (or err) for every server, with the
+// container named after the server.
 type stubResolver struct {
 	mu    sync.Mutex
 	res   sources.Resolved
@@ -31,7 +32,7 @@ type stubResolver struct {
 	calls int
 }
 
-func (s *stubResolver) Resolve(_ context.Context, _ *config.Config, _ config.ServerSpec) (sources.Resolved, error) {
+func (s *stubResolver) Resolve(_ context.Context, _ *config.Config, spec config.ServerSpec) (sources.Resolved, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -41,6 +42,8 @@ func (s *stubResolver) Resolve(_ context.Context, _ *config.Config, _ config.Ser
 	out := s.res
 	if out.Container != nil {
 		c := *out.Container
+		c.Name = store.ContainerName(spec.Name)
+		c.Ports = slices.Clone(c.Ports)
 		out.Container = &c
 	}
 	if out.Image.Build != nil {

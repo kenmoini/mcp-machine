@@ -32,8 +32,8 @@ var ErrUnknownServer = errors.New("manager: unknown server")
 // ErrClosed is returned by every method once Close has been called.
 var ErrClosed = errors.New("manager: closed")
 
-// EndpointFunc returns the URL at which an http-mode container serves MCP.
-// nil means DefaultEndpoint (Task 27).
+// EndpointFunc returns the URL at which an http-mode container serves MCP,
+// given the container as inspected after it started.
 type EndpointFunc func(info runtime.ContainerInfo, ep sources.HTTPEndpoint) (string, error)
 
 // Builder builds an image from a build plan and returns its reference.
@@ -64,6 +64,11 @@ type Manager struct {
 	opts     Options
 	log      *slog.Logger
 
+	// reconcileMu serializes Apply. It is held while Apply waits on runners;
+	// nothing else takes it, so commands (Start, Stop, ...) never wait for it.
+	reconcileMu sync.Mutex
+	applied     bool // the first Apply (adoption, network join) has run; guarded by reconcileMu
+
 	mu      sync.Mutex // guards the fields below; never held while waiting on a runner
 	cfg     *config.Config
 	runners map[string]*runner
@@ -90,6 +95,9 @@ func New(engine runtime.Engine, resolver sources.Resolver, builder Builder, reg 
 	if opts.Version == "" {
 		opts.Version = "dev"
 	}
+	if opts.EndpointFunc == nil {
+		opts.EndpointFunc = DefaultEndpoint(opts)
+	}
 	return &Manager{
 		engine:   engine,
 		resolver: resolver,
@@ -99,54 +107,6 @@ func New(engine runtime.Engine, resolver sources.Resolver, builder Builder, reg 
 		log:      opts.Logger,
 		runners:  map[string]*runner{},
 	}
-}
-
-// Apply makes cfg the current configuration: every enabled server without a
-// runner gets one and is started, and runners whose server is no longer in
-// the config are removed (container included). Runners that already exist
-// are left alone, so applying the same config twice changes nothing.
-//
-// Task 26 replaces the body of the per-server loop with full reconciliation
-// (hash changes, adoption of existing containers, enabled: false, paused).
-func (m *Manager) Apply(ctx context.Context, cfg *config.Config) error {
-	if cfg == nil {
-		return errors.New("manager: nil config")
-	}
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return ErrClosed
-	}
-	m.cfg = cfg
-	inConfig := make(map[string]bool, len(cfg.Servers))
-	for _, spec := range cfg.Servers {
-		inConfig[spec.Name] = true
-		if !spec.IsEnabled() {
-			continue // Task 26: enabled: false stops an existing runner
-		}
-		if _, ok := m.runners[spec.Name]; ok {
-			continue // Task 26: hash change → Remove then recreate
-		}
-		r := newRunner(m, cfg, spec)
-		m.runners[spec.Name] = r
-		r.events <- event{kind: evStart} // fresh buffered channel: never blocks
-		go r.run()
-	}
-	var gone []string
-	for name := range m.runners {
-		if !inConfig[name] {
-			gone = append(gone, name)
-		}
-	}
-	m.mu.Unlock()
-
-	var errs []error
-	for _, name := range gone {
-		if err := m.Remove(ctx, name); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // config returns the most recently applied configuration.
@@ -203,8 +163,15 @@ func (m *Manager) Remove(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	// Once queued the removal completes even if ctx ends: the runner
-	// forgets itself (see forget), so the name never points at a dead runner.
+	return m.removeRunner(ctx, r)
+}
+
+// removeRunner removes r and waits for it to end. Once queued the removal
+// completes even if ctx ends: the runner forgets itself (see forget), so the
+// name never points at a dead runner. While it is pending Apply waits for it
+// rather than mistaking the runner for a live one (see settledRunner).
+func (m *Manager) removeRunner(ctx context.Context, r *runner) error {
+	r.beginRemoval()
 	if err := r.send(ctx, evRemove); err != nil {
 		return err
 	}
@@ -235,9 +202,10 @@ func (m *Manager) Rebuild(ctx context.Context, name string) error {
 func (m *Manager) forget(r *runner) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.runners[r.name] == r {
-		delete(m.runners, r.name)
+	if cur, ok := m.runners[r.name]; ok && cur != r {
+		return // a newer runner owns the name and its entry
 	}
+	delete(m.runners, r.name)
 	m.reg.Delete(r.name)
 }
 
@@ -278,11 +246,14 @@ func (m *Manager) Lookup(name string) (*mcp.Server, bool) {
 // Logs returns the last tail lines of the server's container output.
 func (m *Manager) Logs(ctx context.Context, name string, tail int) ([]runtime.LogLine, error) {
 	m.mu.Lock()
-	_, ok := m.runners[name]
+	r, ok := m.runners[name]
 	st, _ := m.reg.Get(name)
 	m.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("%w %q", ErrUnknownServer, name)
+	}
+	if r.spec.Type == "remote" {
+		return nil, fmt.Errorf("manager: server %q: remote server has no logs", name)
 	}
 	if st.ContainerID == "" {
 		return nil, fmt.Errorf("manager: server %q has no container", name)
