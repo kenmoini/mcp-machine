@@ -113,6 +113,47 @@ func TestParse(t *testing.T) {
 		},
 		{name: "short cluster stays unknown", line: `docker run -id img`, wantErr: "unknown flag -id"},
 		{name: "attached value on non-value short flag", line: `docker run -ix img`, wantErr: "unknown flag -ix"},
+		{name: "arithmetic expansion", line: `docker run img $((1+2))`, wantErr: "unsupported shell syntax: arithmetic expansion"},
+		{name: "brace expansion list", line: `docker run img a{1,2}`, wantErr: "unsupported shell syntax: brace expansion"},
+		{name: "brace expansion sequence", line: `docker run img a{1..3}`, wantErr: "unsupported shell syntax: brace expansion"},
+		{name: "param default", line: `docker run -e X=${X:-dflt} img`, wantErr: "unsupported shell syntax: parameter expansion"},
+		{name: "param default quoted", line: `docker run -e "X=${X:-dflt}" img`, wantErr: "unsupported shell syntax: parameter expansion"},
+		{name: "param alternate", line: `docker run -e X=${X:+word} img`, wantErr: "unsupported shell syntax: parameter expansion"},
+		{name: "param length", line: `docker run img ${#X}`, wantErr: "unsupported shell syntax: parameter expansion"},
+		{name: "param slice", line: `docker run img ${X:1:2}`, wantErr: "unsupported shell syntax: parameter expansion"},
+		{name: "param replace", line: `docker run img ${X/a/b}`, wantErr: "unsupported shell syntax: parameter expansion"},
+		{name: "param indirect", line: `docker run img ${!X}`, wantErr: "unsupported shell syntax: parameter expansion"},
+		{name: "param index", line: `docker run img ${X[1]}`, wantErr: "unsupported shell syntax: parameter expansion"},
+		{name: "special param at", line: `docker run img $@`, wantErr: "unsupported shell syntax: parameter expansion"},
+		{name: "special param positional", line: `docker run img $1`, wantErr: "unsupported shell syntax: parameter expansion"},
+		{name: "command substitution", line: `docker run img $(echo hi)`, wantErr: "unsupported shell syntax: command substitution"},
+		{name: "command substitution backquote", line: "docker run img `echo hi`", wantErr: "unsupported shell syntax: command substitution"},
+		{name: "command substitution quoted", line: `docker run img "$(echo hi)"`, wantErr: "unsupported shell syntax: command substitution"},
+		{name: "process substitution in", line: `docker run img <(echo)`, wantErr: "unsupported shell syntax: process substitution"},
+		{name: "process substitution out", line: `docker run img >(echo)`, wantErr: "unsupported shell syntax: process substitution"},
+		{name: "tilde expansion", line: `docker run -v ~/x:/c img`, wantErr: "unsupported shell syntax: tilde expansion"},
+		{name: "extglob", line: `docker run img @(a|b)`, wantErr: "unsupported shell syntax"},
+		{name: "empty equals value", line: `docker run --name= img`, wantErr: "flag --name requires a value"},
+		{
+			name: "glob stays literal",
+			line: `docker run img *.txt a?b`,
+			want: dockerrun.Spec{Image: "img", Args: []string{"*.txt", "a?b"}},
+		},
+		{
+			name: "tilde not at word start is literal",
+			line: `docker run --volume=~/x:/c img`,
+			want: dockerrun.Spec{Image: "img", Volumes: []string{"~/x:/c"}},
+		},
+		{
+			name: "quoted braces and quoted tilde are literal",
+			line: `docker run img "a{1,2}" '~' '$((1+2))' '${X:-d}'`,
+			want: dockerrun.Spec{Image: "img", Args: []string{"a{1,2}", "~", "$((1+2))", "${X:-d}"}},
+		},
+		{
+			name: "braces without comma are literal",
+			line: `docker run img {} a{b}`,
+			want: dockerrun.Spec{Image: "img", Args: []string{"{}", "a{b}"}},
+		},
 		{name: "tty -it", line: `docker run -it img`, wantErr: "tty is not supported"},
 		{name: "tty -ti", line: `docker run -ti img`, wantErr: "tty is not supported"},
 		{name: "tty -t", line: `docker run -t img`, wantErr: "tty is not supported"},
@@ -149,4 +190,21 @@ func TestParse(t *testing.T) {
 			}
 		})
 	}
+}
+
+// FuzzParse checks the (Spec, error) contract: no input may panic.
+func FuzzParse(f *testing.F) {
+	for _, seed := range []string{
+		`docker run img <(echo)`, `docker run img >(echo)`, `docker run img $((1+2))`,
+		`docker run img ${X:-d}`, `docker run -e A=$B img`, `docker run img a{1,2}`,
+		`docker run ~ img`, "docker run `x` img", `docker run img @(a|b) !(c) *(d)`,
+		`docker run "`, `docker run 'x`, `docker run img $'\x41'`, `docker run img ;`,
+		`docker run img | cat`, `docker run img & x`, `docker run img $(`, `docker run img ${`,
+		`docker run img ${!X*}`, `docker run img ${X[@]}`, `docker run img <<EOF`,
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, line string) {
+		_, _ = dockerrun.Parse(line)
+	})
 }

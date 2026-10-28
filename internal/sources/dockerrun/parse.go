@@ -5,9 +5,11 @@ package dockerrun
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"mvdan.cc/sh/v3/shell"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // Spec is the supported subset of a docker/podman run command line.
@@ -36,11 +38,100 @@ func placeholderEnv(name string) string {
 	return "${" + name + "}"
 }
 
+var plainName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// checkSyntax rejects shell syntax that would resolve or alter the input
+// rather than pass it through: only plain $NAME / ${NAME} references (which
+// placeholderEnv keeps verbatim), quoting and literal text are allowed. This
+// also keeps constructs the expander cannot handle away from it.
+func checkSyntax(line string) error {
+	for w, err := range syntax.NewParser().WordsSeq(strings.NewReader(line)) {
+		if err != nil {
+			return fmt.Errorf("parse command line: %w", err)
+		}
+		src := wordSource(line, w)
+		if lit, ok := firstPart(w).(*syntax.Lit); ok && strings.HasPrefix(lit.Value, "~") {
+			return unsupported("tilde expansion", src)
+		}
+		// Brace expansion is only visible after splitting; this mutates the
+		// local copy of the word, which is discarded afterwards (and must not
+		// be printed, so src was taken above).
+		syntax.SplitBraces(w)
+		var what string
+		syntax.Walk(w, func(n syntax.Node) bool {
+			if what != "" {
+				return false
+			}
+			switch n := n.(type) {
+			case *syntax.ParamExp:
+				if !isPlainParam(n) {
+					what = "parameter expansion other than $NAME or ${NAME}"
+				}
+				return false
+			case *syntax.BraceExp:
+				what = "brace expansion"
+			case *syntax.CmdSubst:
+				what = "command substitution"
+			case *syntax.ArithmExp:
+				what = "arithmetic expansion"
+			case *syntax.ProcSubst:
+				what = "process substitution"
+			case *syntax.ExtGlob:
+				what = "extended glob"
+			}
+			return what == ""
+		})
+		if what != "" {
+			return unsupported(what, src)
+		}
+	}
+	return nil
+}
+
+func firstPart(w *syntax.Word) syntax.WordPart {
+	if len(w.Parts) == 0 {
+		return nil
+	}
+	return w.Parts[0]
+}
+
+// isPlainParam reports whether p is exactly $NAME or ${NAME}.
+func isPlainParam(p *syntax.ParamExp) bool {
+	return p.Param != nil && plainName.MatchString(p.Param.Value) &&
+		p.Flags == nil && !p.Excl && !p.Length && !p.Width && !p.IsSet &&
+		p.Split == syntax.OptUnset && p.GlobSubst == syntax.OptUnset && p.RcExpand == syntax.OptUnset &&
+		p.NestedParam == nil && p.Index == nil && len(p.Modifiers) == 0 &&
+		p.Slice == nil && p.Repl == nil && p.Names == 0 && p.Exp == nil
+}
+
+// wordSource returns the text of w as written in line.
+func wordSource(line string, w *syntax.Word) string {
+	start, end := int(w.Pos().Offset()), int(w.End().Offset())
+	if start < 0 || end > len(line) || start > end {
+		return ""
+	}
+	return line[start:end]
+}
+
+func unsupported(what, src string) error {
+	return fmt.Errorf("unsupported shell syntax: %s in %q", what, src)
+}
+
 // attachedShort lists the short value flags that accept an attached value.
 var attachedShort = map[string]bool{"-e": true, "-v": true, "-p": true, "-w": true}
 
 // Parse parses a "docker run ..." or "podman run ..." command line.
-func Parse(line string) (Spec, error) {
+func Parse(line string) (spec Spec, err error) {
+	// The shell library has panicked on exotic input before; whatever the
+	// input, the contract is a Spec or an error.
+	defer func() {
+		if r := recover(); r != nil {
+			spec, err = Spec{}, fmt.Errorf("parse command line: %v", r)
+		}
+	}()
+	if err := checkSyntax(line); err != nil {
+		return Spec{}, err
+	}
 	toks, err := shell.Fields(line, placeholderEnv)
 	if err != nil {
 		return Spec{}, fmt.Errorf("parse command line: %w", err)
@@ -93,6 +184,9 @@ func Parse(line string) (Spec, error) {
 				}
 				val = toks[i]
 				i++
+			}
+			if hasVal && val == "" {
+				return Spec{}, fmt.Errorf("flag %s requires a value", flag)
 			}
 			if err := s.setValue(flag, val); err != nil {
 				return Spec{}, err
