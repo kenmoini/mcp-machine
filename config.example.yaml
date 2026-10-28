@@ -1,6 +1,12 @@
 # MCP Machine example configuration.
 # Copy to config.yaml and edit. ${VAR} placeholders are expanded from the
 # environment at load time; every field shown here is optional unless noted.
+#
+# Configuration is read from three locations, later ones overriding earlier:
+#   1. /etc/mcp-machine/config.yaml      this file (admin base, read-only to the app)
+#   2. /etc/mcp-machine/config.d/*.yaml  admin drop-ins holding only `servers:`
+#                                        (see config.example.d/)
+#   3. /data/config.d/*.yaml             written by the web UI, one server per file
 
 listen: ":8080"
 public_url: "http://mcp.lan:8080"      # used in connect snippets + default allowed origin; set it when browsers use a DNS name
@@ -30,16 +36,6 @@ servers:
       url: https://api.githubcopilot.com/mcp/
       transport: http                  # http | sse | auto
       headers: { Authorization: "Bearer ${GITHUB_TOKEN}" }
-
-  - name: filesystem
-    type: command
-    command:
-      command: npx
-      args: ["-y", "@modelcontextprotocol/server-filesystem", "/projects"]
-      env: { LOG_LEVEL: debug }
-    container:                         # optional overrides on the generated spec
-      volumes: ["/srv/projects:/projects:ro"]   # add ",z" on SELinux hosts: /srv/projects:/projects:ro,z
-      image: docker.io/library/node:20
 
   - name: fetch
     type: command

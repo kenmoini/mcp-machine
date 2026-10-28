@@ -9,8 +9,14 @@
 # and  sudo loginctl enable-linger $USER  so the user's units start at boot and
 # keep running after logout.
 #
-# /srv/mcp-machine must exist on the host and contain config.yaml.
-# Secrets referenced as ${VAR} in config.yaml can be supplied with
+# Two host directories are mounted:
+#   /etc/mcp-machine  (read-only) holds the admin files: config.yaml and
+#                     optional drop-ins in config.d/*.yaml. It must exist and
+#                     contain config.yaml (start from config.example.yaml).
+#   /srv/mcp-machine  -> /data (writable) holds UI-owned state; the web UI writes
+#                     the servers it adds or edits to /srv/mcp-machine/config.d/
+#                     <name>.yaml, one file per server. It must exist.
+# Secrets referenced as ${VAR} in the config files can be supplied with
 # EnvironmentFile=/etc/mcp-machine.env or Environment=NAME=value lines.
 [Unit]
 Description=MCP Machine
@@ -22,6 +28,7 @@ Image=ghcr.io/kenmoini/mcp-machine:latest
 ContainerName=mcp-machine
 PublishPort=8080:8080
 Volume=/run/podman/podman.sock:/run/podman/podman.sock
+Volume=/etc/mcp-machine:/etc/mcp-machine:ro
 Volume=/srv/mcp-machine:/data
 Network=mcp-machine.network
 SecurityLabelDisable=true

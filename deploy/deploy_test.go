@@ -99,8 +99,57 @@ func TestContainerfileStages(t *testing.T) {
 	if !strings.Contains(cf, "GOTOOLCHAIN=auto") {
 		t.Errorf("Containerfile build stage missing GOTOOLCHAIN=auto")
 	}
-	if !strings.Contains(cf, `CMD ["serve","-c","/data/config.yaml"]`) {
-		t.Errorf("Containerfile missing the default CMD")
+}
+
+func TestContainerfileCreatesAdminRootAndDefaultsToIt(t *testing.T) {
+	cf := readRepoFile(t, "Containerfile")
+	if !strings.Contains(cf, "mkdir -p /etc/mcp-machine/config.d") {
+		t.Errorf("Containerfile does not create /etc/mcp-machine/config.d")
+	}
+	if !strings.Contains(cf, `CMD ["serve","-c","/etc/mcp-machine"]`) {
+		t.Errorf("Containerfile default CMD does not read the admin root /etc/mcp-machine")
+	}
+	if strings.Contains(cf, "/data/config.yaml") {
+		t.Errorf("Containerfile still refers to /data/config.yaml")
+	}
+}
+
+func TestComposeMountsAdminRootReadOnly(t *testing.T) {
+	var doc struct {
+		Services map[string]struct {
+			Volumes []string `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "compose.yaml")), &doc); err != nil {
+		t.Fatalf("parse compose.yaml: %v", err)
+	}
+	svc := doc.Services["mcp-machine"]
+	for _, v := range svc.Volumes {
+		if strings.HasSuffix(v, ":/etc/mcp-machine:ro") {
+			return
+		}
+	}
+	t.Errorf("volumes %v missing a read-only :/etc/mcp-machine:ro mount", svc.Volumes)
+}
+
+func TestQuadletMountsAdminRootReadOnly(t *testing.T) {
+	c := readRepoFile(t, "deploy/quadlet/mcp-machine.container")
+	if !strings.Contains(c, "Volume=/etc/mcp-machine:/etc/mcp-machine:ro") {
+		t.Errorf(".container missing the read-only admin root mount")
+	}
+}
+
+func TestMakeRunPassesConfigFlags(t *testing.T) {
+	mk := readRepoFile(t, "Makefile")
+	for _, want := range []string{
+		"CONFIG ?= /etc/mcp-machine",
+		"CONFIG_D ?= /data/config.d",
+		"serve -c $(CONFIG) --config-d $(CONFIG_D)",
+		"validate -c $(CONFIG) --config-d $(CONFIG_D)",
+	} {
+		if !strings.Contains(mk, want) {
+			t.Errorf("Makefile missing %q", want)
+		}
 	}
 }
 

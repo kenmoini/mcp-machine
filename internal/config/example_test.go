@@ -1,25 +1,33 @@
 package config_test
 
 import (
-	"os"
 	"testing"
 
 	"github.com/kenmoini/mcp-machine/internal/config"
 )
 
 func TestExampleConfigLoadsAndValidates(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
+	for _, v := range []string{"GHCR_USER", "GHCR_TOKEN", "GITHUB_TOKEN"} {
+		t.Setenv(v, "x")
 	}
-	c, err := config.Parse(data, func(string) (string, bool) { return "x", true })
+	set, err := config.Layout{
+		BaseFile:  "../../config.example.yaml",
+		SystemDir: "../../config.example.d",
+	}.Load()
 	if err != nil {
-		t.Fatalf("Parse: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
-	if err := config.Validate(c); err != nil {
+	if err := config.Validate(set.Config); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if len(c.Servers) != 4 {
-		t.Errorf("servers = %d, want 4", len(c.Servers))
+	if len(set.Config.Servers) != 4 {
+		t.Errorf("servers = %d, want 4", len(set.Config.Servers))
+	}
+	o, ok := set.Origins["filesystem"]
+	if !ok || len(o.Files) == 0 {
+		t.Fatalf("no origin recorded for filesystem: %+v", set.Origins)
+	}
+	if got := o.Files[0].Layer; got != config.LayerSystem {
+		t.Errorf("filesystem layer = %v, want %v", got, config.LayerSystem)
 	}
 }

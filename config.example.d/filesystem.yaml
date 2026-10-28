@@ -1,0 +1,14 @@
+# Example admin drop-in: save as /etc/mcp-machine/config.d/filesystem.yaml.
+# A drop-in holds only `servers:`; its servers are added to (or override, by
+# name) those in /etc/mcp-machine/config.yaml. The web UI writes its own
+# drop-ins to /data/config.d/, which load after these.
+servers:
+  - name: filesystem
+    type: command
+    command:
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/projects"]
+      env: { LOG_LEVEL: debug }
+    container:                         # optional overrides on the generated spec
+      volumes: ["/srv/projects:/projects:ro"]   # add ",z" on SELinux hosts: /srv/projects:/projects:ro,z
+      image: docker.io/library/node:20

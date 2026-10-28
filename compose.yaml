@@ -1,6 +1,12 @@
 # Run MCP Machine with `podman compose up -d` (or `make compose-up`).
 #
-# ./data must exist and contain config.yaml (start from config.example.yaml).
+# Two directories are mounted:
+#   ./config  -> /etc/mcp-machine (read-only). The admin files: put config.yaml
+#             here (start from config.example.yaml) and optional drop-ins in
+#             ./config/config.d/*.yaml (see config.example.d/).
+#   ./data    -> /data. Writable state; the web UI writes the servers it adds or
+#             edits to ./data/config.d/<name>.yaml, one file per server.
+# Both directories must exist before `up`.
 # The Podman API socket must be active on the host:
 #   sudo systemctl enable --now podman.socket
 services:
@@ -10,11 +16,12 @@ services:
       - "8080:8080"
     volumes:
       - /run/podman/podman.sock:/run/podman/podman.sock
+      - ./config:/etc/mcp-machine:ro
       - ./data:/data
     security_opt:
       - label=disable
     restart: unless-stopped
-    # Secrets are referenced from config.yaml as ${VAR} and resolved from this
+    # Secrets are referenced from the config files as ${VAR} and resolved from this
     # container's environment. Uncomment and set what your config uses.
     # environment:
     #   GHCR_USER: ${GHCR_USER}

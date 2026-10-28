@@ -6,6 +6,11 @@ TAG    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE   ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# Configuration for `make run` and `make validate`: the admin root (config.yaml
+# plus config.d/) and the UI-owned drop-in directory.
+CONFIG ?= /etc/mcp-machine
+CONFIG_D ?= /data/config.d
+
 # Where `make quadlet-install` puts the units. Rootful by default; for rootless:
 #   make quadlet-install QUADLET_DIR=$HOME/.config/containers/systemd SYSTEMCTL="systemctl --user"
 QUADLET_DIR ?= /etc/containers/systemd
@@ -83,10 +88,10 @@ fmt-check:
 	if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 run: build
-	./bin/mcp-machine serve
+	./bin/mcp-machine serve -c $(CONFIG) --config-d $(CONFIG_D)
 
 validate: build
-	./bin/mcp-machine validate
+	./bin/mcp-machine validate -c $(CONFIG) --config-d $(CONFIG_D)
 
 image:
 	$(ENGINE) build \

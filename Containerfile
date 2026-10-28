@@ -43,9 +43,14 @@ LABEL org.opencontainers.image.source="https://github.com/kenmoini/mcp-machine" 
 
 COPY --from=build /tmp/mcp-machine /usr/local/bin/mcp-machine
 
-# Config (config.yaml), git clones, build contexts and caches live here.
+# The admin configuration root: config.yaml plus config.d/*.yaml. Bind-mount a
+# host directory read-only over /etc/mcp-machine; the app never writes there.
+RUN mkdir -p /etc/mcp-machine/config.d
+
+# UI-owned state: the config.d/ drop-ins the web UI writes, git clones, build
+# contexts and caches live here.
 VOLUME /data
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/mcp-machine"]
-CMD ["serve","-c","/data/config.yaml"]
+CMD ["serve","-c","/etc/mcp-machine"]
