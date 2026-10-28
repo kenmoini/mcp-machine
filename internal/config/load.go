@@ -9,6 +9,8 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -33,7 +35,7 @@ func Parse(data []byte, lookup func(string) (string, bool)) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	if err := finish(c, lookup); err != nil {
+	if err := finish(c, lookup, nil); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -54,9 +56,11 @@ func decode(data []byte) (*Config, error) {
 }
 
 // finish applies defaults to c and expands ${VAR} references using lookup.
-func finish(c *Config, lookup func(string) (string, bool)) error {
+// where, when not nil, describes where a server is defined for the errors
+// about unset variables (see expandEnv).
+func finish(c *Config, lookup func(string) (string, bool), where func(server string) string) error {
 	ApplyDefaults(c)
-	return expandEnv(c, lookup)
+	return expandEnv(c, lookup, where)
 }
 
 // dropIn is the shape of a drop-in file: a servers list and nothing else.
@@ -151,10 +155,74 @@ func setDefault(field *string, def string) {
 // expandEnv replaces ${VAR} in secret-bearing string fields. command.run
 // and command.args are only checked: they stay as written and are expanded
 // when the container is resolved, but their variables must be set too. All
-// unset variables are collected and reported in a single joined error.
-func expandEnv(c *Config, lookup func(string) (string, bool)) error {
+// unset variables are collected and reported in a single joined error, one
+// line per variable, naming the servers that reference it (in config order):
+// `config: ${TOK} is not set (referenced by server "a")`. When where is not
+// nil and describes a server, the description follows its name:
+// `(referenced by server "a", defined in <where("a")>)`. A variable only the
+// global sections (registries) reference names no server.
+func expandEnv(c *Config, lookup func(string) (string, bool), where func(server string) string) error {
 	missing := map[string]bool{}
-	expand := func(s string) string {
+	expand := expander(lookup, missing)
+	for i := range c.Registries {
+		r := &c.Registries[i]
+		r.Username = expand(r.Username)
+		r.Password = expand(r.Password)
+	}
+	referrers := map[string][]string{} // variable → the servers referencing it
+	for i := range c.Servers {
+		s := &c.Servers[i]
+		unset := map[string]bool{}
+		serverVars(s, expander(lookup, unset), checker(lookup, unset))
+		for n := range unset {
+			missing[n] = true
+			referrers[n] = append(referrers[n], s.Name)
+		}
+	}
+
+	if len(missing) == 0 {
+		return nil
+	}
+	names := sortedNames(missing)
+	errs := make([]error, len(names))
+	for i, n := range names {
+		errs[i] = fmt.Errorf("config: ${%s} is not set%s", n, referencedBy(referrers[n], where))
+	}
+	return errors.Join(errs...)
+}
+
+// referencedBy is the suffix of an unset-variable error naming the servers
+// that reference the variable, or "" when none does. With where, each
+// server's description follows its name.
+func referencedBy(servers []string, where func(string) string) string {
+	if len(servers) == 0 {
+		return ""
+	}
+	parts := make([]string, len(servers))
+	for i, s := range servers {
+		parts[i] = strconv.Quote(s)
+		if where != nil {
+			parts[i] = "server " + parts[i]
+			if w := where(s); w != "" {
+				parts[i] += ", defined in " + w
+			}
+		}
+	}
+	switch {
+	case where != nil:
+		return " (referenced by " + strings.Join(parts, "; ") + ")"
+	case len(servers) == 1:
+		return " (referenced by server " + parts[0] + ")"
+	default:
+		return " (referenced by servers " + strings.Join(parts, ", ") + ")"
+	}
+}
+
+// expander returns a function replacing each ${VAR} in its argument with
+// lookup's value, recording in missing (and leaving as written) every one
+// lookup does not know.
+func expander(lookup func(string) (string, bool), missing map[string]bool) func(string) string {
+	return func(s string) string {
 		return envRef.ReplaceAllStringFunc(s, func(m string) string {
 			name := m[2 : len(m)-1]
 			v, ok := lookup(name)
@@ -165,26 +233,6 @@ func expandEnv(c *Config, lookup func(string) (string, bool)) error {
 			return v
 		})
 	}
-	check := checker(lookup, missing)
-
-	for i := range c.Registries {
-		r := &c.Registries[i]
-		r.Username = expand(r.Username)
-		r.Password = expand(r.Password)
-	}
-	for i := range c.Servers {
-		serverVars(&c.Servers[i], expand, check)
-	}
-
-	if len(missing) == 0 {
-		return nil
-	}
-	names := sortedNames(missing)
-	errs := make([]error, len(names))
-	for i, n := range names {
-		errs[i] = fmt.Errorf("config: ${%s} is not set", n)
-	}
-	return errors.Join(errs...)
 }
 
 // UnsetVars returns, sorted, the names of the ${VAR} references in s that

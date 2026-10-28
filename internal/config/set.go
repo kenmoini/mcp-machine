@@ -91,9 +91,24 @@ func (o Origin) String() string {
 type Set struct {
 	Config   *Config           // merged, defaulted, expanded
 	Files    []string          // every file loaded, in load order (empty when nothing was found)
+	Layers   []Layer           // Layers[i] is the layer of Files[i]
 	Origins  map[string]Origin // per server name
 	Fallback string            // Layout.Fallback
 	Searched []string          // Layout.Searched
+}
+
+// AdminFiles returns the administrator's files that were loaded (the base
+// file, or the legacy file standing in for it, and the system drop-ins), in
+// load order: the entries of Files outside the user layer. A file counts
+// even when it defines no servers.
+func (s *Set) AdminFiles() []string {
+	var out []string
+	for i, f := range s.Files {
+		if s.Layers[i] != LayerUser {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // Load reads every layer of l and merges them into one Config, expanding
@@ -159,6 +174,9 @@ func (l Layout) load(lookup func(string) (string, bool)) (*Set, error) {
 			return nil, err
 		}
 		for _, p := range paths {
+			if d.layer == LayerUser && p == l.skip {
+				continue
+			}
 			data, ok, err := readConfigFile(p)
 			if err != nil {
 				return nil, err
@@ -179,7 +197,10 @@ func (l Layout) load(lookup func(string) (string, bool)) (*Set, error) {
 		return nil, err
 	}
 	cfg.Servers = servers
-	if err := finish(cfg, lookup); err != nil {
+	where := func(server string) string {
+		return strings.TrimPrefix(origins[server].String(), "Defined in ")
+	}
+	if err := finish(cfg, lookup, where); err != nil {
 		return nil, err
 	}
 
@@ -191,6 +212,7 @@ func (l Layout) load(lookup func(string) (string, bool)) (*Set, error) {
 	}
 	for _, f := range files {
 		set.Files = append(set.Files, f.path)
+		set.Layers = append(set.Layers, f.layer)
 	}
 	return set, nil
 }

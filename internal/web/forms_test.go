@@ -698,10 +698,48 @@ func TestDeleteActionFor(t *testing.T) {
 			Note: "Defined by the administrator in " + baseFile + ", " + systemFile +
 				"; it cannot be deleted here, only overridden by saving changes."}},
 		{"unknown", config.Origin{}, false, web.DeleteAction{Mode: "none"}},
+		{"foreign", foreignOrigin(false), true, web.DeleteAction{Mode: "none",
+			Note: "Defined in /data/config.d/zzz.yaml, a file the UI does not manage; edit or remove it by hand."}},
+		{"foreign over admin", foreignOrigin(true), true, web.DeleteAction{Mode: "none",
+			Note: "Defined in /data/config.d/zzz.yaml, a file the UI does not manage; edit or remove it by hand."}},
+		{"user with foreign", withCanonical(foreignOrigin(false)), true, web.DeleteAction{Mode: "delete",
+			Note: "Removes /data/config.d/alpha.yaml. The definition in /data/config.d/zzz.yaml stays in effect."}},
+		{"revert with foreign", withCanonical(foreignOrigin(true)), true, web.DeleteAction{Mode: "revert",
+			Note: "Removes /data/config.d/alpha.yaml. The definition in /data/config.d/zzz.yaml stays in effect."}},
 	} {
 		if got := web.DeleteActionFor("alpha", tc.o, tc.found); got != tc.want {
 			t.Errorf("%s: got %+v, want %+v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// foreignOrigin is alpha defined in the hand-placed user file zzz.yaml,
+// over the admin definition when admin is true.
+func foreignOrigin(admin bool) config.Origin {
+	var o config.Origin
+	if admin {
+		o = adminOrigin()
+	}
+	o.Files = append(o.Files, config.OriginFile{Path: "/data/config.d/zzz.yaml", Layer: config.LayerUser})
+	return o
+}
+
+// withCanonical adds alpha's own user file, which the loader applies last.
+func withCanonical(o config.Origin) config.Origin {
+	o.Files = append(o.Files, config.OriginFile{Path: userFile("alpha"), Layer: config.LayerUser})
+	return o
+}
+
+func TestDeleteForeignOriginIs409(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.origins["alpha"] = foreignOrigin(false)
+	rec := e.post("/servers/alpha/delete", nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	mustContain(t, rec.Body.String(), "a file the UI does not manage")
+	if len(e.wr.Deleted) != 0 || e.cfg.reloads != 0 {
+		t.Errorf("deleted %v, reloads %d", e.wr.Deleted, e.cfg.reloads)
 	}
 }
 
@@ -748,6 +786,20 @@ func TestDeleteForeignFileIs409WithPath(t *testing.T) {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
 	mustContain(t, rec.Body.String(), "zzz.yaml", `name="command.command"`)
+	if e.cfg.reloads != 0 {
+		t.Errorf("reloads = %d", e.cfg.reloads)
+	}
+}
+
+func TestUpdateForeignFileIs409(t *testing.T) {
+	e := newEnv(t)
+	e.wr.err = fmt.Errorf("%w: /data/config.d/beta.yaml", config.ErrForeignFile)
+	rec := e.post("/servers/beta/edit", url.Values{"remote.url": {"https://y.example/mcp"}, "enabled": {"1"}})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	// The form is shown again with the message and what was posted.
+	mustContain(t, rec.Body.String(), "beta.yaml", `name="remote.url"`, "https://y.example/mcp")
 	if e.cfg.reloads != 0 {
 		t.Errorf("reloads = %d", e.cfg.reloads)
 	}

@@ -356,8 +356,9 @@ func TestLoadRawKeepsPlaceholders(t *testing.T) {
 		t.Errorf("raw header = %q, want ${TOK}", got)
 	}
 
-	if _, err := l.Load(); err == nil || !strings.Contains(err.Error(), "${TOK} is not set") {
-		t.Errorf("Load with TOK unset: error = %v, want ${TOK} is not set", err)
+	want := `config: ${TOK} is not set (referenced by server "a", defined in ` + l.BaseFile + ` (base))`
+	if _, err := l.Load(); err == nil || err.Error() != want {
+		t.Errorf("Load with TOK unset: error = %v, want %q", err, want)
 	}
 
 	t.Setenv("TOK", "1")
@@ -410,5 +411,57 @@ func TestLayerString(t *testing.T) {
 		if l.String() != want {
 			t.Errorf("Layer(%d).String() = %q, want %q", int(l), l.String(), want)
 		}
+	}
+}
+
+func TestSetAdminFiles(t *testing.T) {
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  []string // relative to the layout root
+	}{
+		{"nothing", nil, nil},
+		{"user drop-ins only", map[string]string{"user.d/c.yaml": remoteYAML("c", "")}, nil},
+		{"base without servers", map[string]string{
+			"config.yaml": "listen: \":9090\"\n", "user.d/c.yaml": remoteYAML("c", ""),
+		}, []string{"config.yaml"}},
+		{"system drop-in only", map[string]string{
+			"config.d/a.yaml": remoteYAML("a", ""), "user.d/c.yaml": remoteYAML("c", ""),
+		}, []string{"config.d/a.yaml"}},
+		{"every layer", map[string]string{
+			"config.yaml": remoteYAML("a", ""), "config.d/b.yaml": remoteYAML("b", ""),
+			"user.d/a.yaml": remoteYAML("a", ""),
+		}, []string{"config.yaml", "config.d/b.yaml"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := layoutDir(t, tc.files)
+			root := filepath.Dir(l.BaseFile)
+			var want []string
+			for _, rel := range tc.want {
+				want = append(want, filepath.Join(root, rel))
+			}
+			if got := mustLoad(t, l).AdminFiles(); !reflect.DeepEqual(got, want) {
+				t.Errorf("AdminFiles() = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestLoadUnsetVarNamesServersAndFiles(t *testing.T) {
+	l := layoutDir(t, map[string]string{
+		"config.yaml":       remoteYAML("a", "") + "  - {name: b, type: remote, remote: {url: \"https://b/\", headers: {X: \"${TOK}\"}}}\n",
+		"user.d/a.yaml":     remoteYAML("a", "      headers: {Authorization: \"${TOK}\"}\n"),
+		"user.d/other.yaml": "servers:\n  - {name: c, type: remote, remote: {url: \"https://c/\"}}\n",
+	})
+	t.Setenv("TOK", "")
+	if err := os.Unsetenv("TOK"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := l.Load()
+	want := `config: ${TOK} is not set (referenced by server "a", defined in ` + l.BaseFile + ` (base); overridden by ` +
+		filepath.Join(l.UserDir, "a.yaml") + ` (user); server "b", defined in ` + l.BaseFile + ` (base))`
+	if err == nil || err.Error() != want {
+		t.Errorf("Load: error = %v\nwant %s", err, want)
 	}
 }

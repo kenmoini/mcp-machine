@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,17 +40,25 @@ type deleteAction struct {
 // deleteActionFor returns the delete action for server name defined by o;
 // found is false when the origin is unknown. A server only the UI defines
 // is deleted; an admin-defined one with a UI override reverts to the admin
-// definition; an admin-only one cannot be deleted.
+// definition; an admin-only one, or one whose user definition is in a file
+// other than <name>.yaml, cannot be deleted. When another user file also
+// defines the server, its definition takes over and the note says so.
 func deleteActionFor(name string, o config.Origin, found bool) deleteAction {
 	if !found {
 		return deleteAction{Mode: "none"}
 	}
-	user := o.UserFile()
-	switch {
-	case user != "" && !o.Admin():
-		return deleteAction{Mode: "delete", Note: "Removes " + user + ". Its container is stopped and removed."}
-	case user != "":
-		return deleteAction{Mode: "revert", Note: "Removes " + user + "; " + name + " goes back to the administrator's definition."}
+	if user := o.UserFile(); user != "" {
+		if filepath.Base(user) != name+".yaml" {
+			return deleteAction{Mode: "none", Note: "Defined in " + user + ", a file the UI does not manage; edit or remove it by hand."}
+		}
+		act := deleteAction{Mode: "delete", Note: "Removes " + user + ". Its container is stopped and removed."}
+		if o.Admin() {
+			act = deleteAction{Mode: "revert", Note: "Removes " + user + "; " + name + " goes back to the administrator's definition."}
+		}
+		if other := otherUserFile(o, user); other != "" {
+			act.Note = "Removes " + user + ". The definition in " + other + " stays in effect."
+		}
+		return act
 	}
 	var admin []string
 	for _, f := range o.Files {
@@ -62,6 +71,17 @@ func deleteActionFor(name string, o config.Origin, found bool) deleteAction {
 	}
 	return deleteAction{Mode: "none", Note: "Defined by the administrator in " + strings.Join(admin, ", ") +
 		"; it cannot be deleted here, only overridden by saving changes."}
+}
+
+// otherUserFile returns the last user file in o other than user: the one
+// whose definition takes effect once user is removed, or "".
+func otherUserFile(o config.Origin, user string) string {
+	for i := len(o.Files) - 1; i >= 0; i-- {
+		if f := o.Files[i]; f.Layer == config.LayerUser && f.Path != user {
+			return f.Path
+		}
+	}
+	return ""
 }
 
 // deleteActionOf returns the delete action for the configured server name.
@@ -553,8 +573,12 @@ func (u *ui) updateServer(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := u.Writer.UpdateServer(cur.Name, spec); err != nil {
 		u.Logger.Warn("update server", "server", cur.Name, "err", err)
+		status := http.StatusInternalServerError
+		if errors.Is(err, config.ErrForeignFile) {
+			status = http.StatusConflict
+		}
 		d.Errors = []string{err.Error()}
-		u.formPage(w, http.StatusInternalServerError, d)
+		u.formPage(w, status, d)
 		return
 	}
 	u.reloadAfterWrite()

@@ -112,6 +112,15 @@ On the first apply after MCP Machine starts, it lists the containers labeled
 - anything else (stale hash, server removed, server disabled, duplicate): stop
   and remove it.
 
+One exception: when no administrator configuration was loaded (no base file,
+no legacy `/data/config.yaml` standing in for it, and no system drop-in), a
+labeled container of a server the configuration does not define is kept, not
+removed, and logged at info. Then a forgotten `/etc/mcp-machine` mount cannot
+delete the servers it defined, even when UI-written drop-ins in
+`/data/config.d` were loaded. Stale containers of servers that are defined are
+still replaced. The decision is made with each configuration applied, so it
+holds for the first apply and its retries.
+
 If the container list cannot be fetched, nothing is started or removed and the
 apply is retried with a doubling delay (1s up to 30s) until the engine answers.
 `/readyz` reports not ready until a configuration has been applied.

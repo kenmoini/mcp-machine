@@ -20,6 +20,7 @@ type configState struct {
 	reloadErrs uint64
 	applied    bool // the manager has applied a config at least once
 	watcher    *config.Watcher
+	applyMu    sync.Mutex // pairs the manager's keep-unknown flag with the Apply that reads it
 }
 
 // Current returns the configuration most recently loaded.
@@ -30,6 +31,13 @@ func (s *configState) Current() *config.Config {
 		return nil
 	}
 	return s.set.Config
+}
+
+// currentSet returns the set most recently loaded.
+func (s *configState) currentSet() *config.Set {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.set
 }
 
 // Files returns the files the current configuration was read from, in load

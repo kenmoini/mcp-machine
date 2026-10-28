@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -269,16 +270,17 @@ func TestPrepareUserDir(t *testing.T) {
 		file := filepath.Join(t.TempDir(), "file")
 		writeFiles(t, filepath.Dir(file), map[string]string{"file": "x"})
 		l, notice := prepareUserDir(config.Layout{UserDir: file})
-		if !strings.HasPrefix(notice, "editing is disabled: "+file+" is not writable (") || !strings.HasSuffix(notice, ")") {
-			t.Errorf("notice = %q", notice)
+		if want := "editing is disabled: " + file + " is not a directory"; notice != want {
+			t.Errorf("notice = %q, want %q", notice, want)
 		}
 		if l.UserDir != "" {
 			t.Errorf("UserDir = %q, want the user layer dropped", l.UserDir)
 		}
 	})
 	t.Run("no user layer", func(t *testing.T) {
-		if l, notice := prepareUserDir(config.Layout{}); notice != "" || l.UserDir != "" {
-			t.Errorf("notice=%q UserDir=%q", notice, l.UserDir)
+		const want = `editing is disabled: no user drop-in directory (--config-d "")`
+		if l, notice := prepareUserDir(config.Layout{}); notice != want || l.UserDir != "" {
+			t.Errorf("notice=%q UserDir=%q, want notice %q", notice, l.UserDir, want)
 		}
 	})
 }
@@ -325,5 +327,123 @@ func TestNewManagerInContainerUnknownIDSkipsJoin(t *testing.T) {
 	waitFor(t, "readyz 200", func() bool { code, _ := get(mux, "/readyz"); return code == http.StatusOK })
 	if conns := eng.Connections(); len(conns) != 0 {
 		t.Fatalf("ConnectNetwork calls = %v, want none", conns)
+	}
+}
+
+// managerFor starts newManager over the layout of flags f with eng, logging
+// to logw, and returns the ops mux.
+func managerFor(t *testing.T, f *configFlags, eng *fake.Engine, logw io.Writer) *http.ServeMux {
+	t.Helper()
+	l, err := f.layout()
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := loadSet(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	deps, err := newManager(ctx, l, set, eng, slog.New(slog.NewTextHandler(logw, nil)))
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cancel(); deps.close() })
+	mux := http.NewServeMux()
+	ops.Mount(mux, deps.ready, deps.metrics)
+	return mux
+}
+
+func TestNewManagerKeepsUnknownWithOnlyUserDropIns(t *testing.T) {
+	// The admin root is missing (a forgotten mount) but a UI-written drop-in
+	// exists: the containers of servers only the admin files knew are kept.
+	tmp := t.TempDir()
+	SetLegacyConfigPath(t, filepath.Join(tmp, "data", "config.yaml"))
+	user := filepath.Join(tmp, "config.d")
+	writeFiles(t, user, map[string]string{
+		"c.yaml": "servers:\n  - {name: c, type: remote, remote: {url: \"http://127.0.0.1:1/mcp\"}}\n",
+	})
+	eng := fake.New()
+	eng.Seed(runtime.ContainerInfo{
+		ID: "seed-ghost", Name: store.ContainerName("ghost"), Image: "img:1", State: "running",
+		Labels: store.Labels("ghost", "whatever", "stdio"),
+	})
+	var logs syncBuf
+	mux := managerFor(t, &configFlags{path: filepath.Join(tmp, "etc"), userDir: user}, eng, &logs)
+
+	waitFor(t, "readyz 200", func() bool { code, _ := get(mux, "/readyz"); return code == http.StatusOK })
+	for _, c := range eng.Calls() {
+		if c == "StopContainer" || c == "RemoveContainer" {
+			t.Errorf("engine call %s with no administrator configuration loaded", c)
+		}
+	}
+	if _, err := eng.InspectContainer(context.Background(), "seed-ghost"); err != nil {
+		t.Fatalf("ghost container gone: %v", err)
+	}
+	want := "level=INFO msg=\"no administrator configuration loaded (searched: " +
+		filepath.Join(tmp, "etc", "config.yaml") + ", " + filepath.Join(tmp, "etc", "config.d") +
+		"); unknown containers are kept\""
+	if !strings.Contains(logs.String(), want) {
+		t.Errorf("log lacks %q:\n%s", want, logs.String())
+	}
+}
+
+func TestNewManagerRemovesUnknownWithAdminBase(t *testing.T) {
+	// An admin base file that defines no servers still counts as loaded:
+	// unknown labeled containers are removed.
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{"config.yaml": "listen: 127.0.0.1:0\n"})
+	eng := fake.New()
+	eng.Seed(runtime.ContainerInfo{
+		ID: "seed-ghost", Name: store.ContainerName("ghost"), Image: "img:1", State: "running",
+		Labels: store.Labels("ghost", "whatever", "stdio"),
+	})
+	var logs syncBuf
+	mux := managerFor(t, &configFlags{path: root, userDir: filepath.Join(t.TempDir(), "config.d")}, eng, &logs)
+
+	waitFor(t, "readyz 200", func() bool { code, _ := get(mux, "/readyz"); return code == http.StatusOK })
+	if _, err := eng.InspectContainer(context.Background(), "seed-ghost"); err == nil {
+		t.Error("ghost container kept although an administrator base file was loaded")
+	}
+}
+
+// syncBuf is a strings.Builder safe for concurrent use.
+type syncBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func TestNewManagerLogsMerges(t *testing.T) {
+	root, user := t.TempDir(), filepath.Join(t.TempDir(), "config.d")
+	writeFiles(t, root, map[string]string{
+		"config.yaml": "servers:\n" +
+			"  - {name: a, type: remote, remote: {url: \"http://127.0.0.1:1/mcp\"}}\n" +
+			"  - {name: b, type: remote, remote: {url: \"http://127.0.0.1:1/mcp\"}}\n",
+		"config.d/a.yaml": "servers:\n  - {name: a, type: remote, remote: {transport: http}}\n",
+	})
+	writeFiles(t, user, map[string]string{
+		"a.yaml": "servers:\n  - {name: a, type: remote, remote: {url: \"http://127.0.0.1:1/mcp\"}}\n",
+	})
+	var logs syncBuf
+	mux := managerFor(t, &configFlags{path: root, userDir: user}, fake.New(), &logs)
+	waitFor(t, "readyz 200", func() bool { code, _ := get(mux, "/readyz"); return code == http.StatusOK })
+
+	want := `level=INFO msg="config: server merged" server=a files=` + strings.Join([]string{
+		filepath.Join(root, "config.yaml"), filepath.Join(root, "config.d", "a.yaml"), filepath.Join(user, "a.yaml"),
+	}, ",") + "\n"
+	if got := logs.String(); strings.Count(got, "config: server merged") != 1 || !strings.Contains(got, want) {
+		t.Errorf("log lacks exactly one %q:\n%s", want, got)
 	}
 }

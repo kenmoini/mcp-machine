@@ -23,6 +23,8 @@ type Layout struct {
 	UserDir   string   // "" when there is no user drop-in directory
 	Fallback  string   // == BaseFile when the legacy file is in use, else ""
 	Searched  []string // every path consulted, for the "no configuration found" warning
+
+	skip string // a user drop-in the loader passes over, to see the set without it; "" skips nothing
 }
 
 // ResolveLayout turns LayoutOptions into a Layout. Path is the admin root

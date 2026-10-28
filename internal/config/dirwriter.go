@@ -89,8 +89,10 @@ func (w DirWriter) UpdateServer(name string, s ServerSpec) error {
 
 // DeleteServer removes <Dir>/<name>.yaml. For a server the administrator
 // also defines, that reverts it to the admin definition. It is an error if
-// no such server exists, if only admin files define it (ErrAdminOwned), or
-// if its user definition is not in a file the UI manages (ErrForeignFile).
+// no such server exists, if only admin files define it (ErrAdminOwned), if
+// its user definition is not in a file the UI manages (ErrForeignFile), or
+// if the configuration without the file would not load (with the real
+// environment) or validate; the file is then left in place.
 func (w DirWriter) DeleteServer(name string) error {
 	editMu.Lock()
 	defer editMu.Unlock()
@@ -120,6 +122,17 @@ func (w DirWriter) DeleteServer(name string) error {
 	}
 	if !exclusive {
 		return fmt.Errorf("%w: %s", ErrForeignFile, user)
+	}
+	// What the next load will see: for a revert, the admin definition comes
+	// back, and it may reference a variable the override did not.
+	without := w.Layout
+	without.skip = p
+	next, err := without.load(os.LookupEnv)
+	if err == nil {
+		err = Validate(next.Config)
+	}
+	if err != nil {
+		return fmt.Errorf("config: removing %s would leave an invalid configuration: %w", p, err)
 	}
 	if err := os.Remove(p); err != nil {
 		return fmt.Errorf("config: remove %s: %w", p, err)

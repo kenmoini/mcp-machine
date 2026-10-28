@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -83,9 +84,9 @@ const (
 // long-lived serve context; the goroutines and every Apply use it, never a
 // request context. deps.close stops them and the manager.
 //
-// While no configuration file is loaded the manager keeps the labeled
-// containers of servers it does not know, so a missing configuration mount
-// does not remove running servers.
+// While no administrator file is loaded (see applyOnce) the manager keeps the
+// labeled containers of servers it does not know, so a missing configuration
+// mount does not remove running servers.
 func newManager(ctx context.Context, l config.Layout, set *config.Set, engine runtime.Engine, logger *slog.Logger) (serveDeps, error) {
 	cfg := set.Config
 	inContainer, selfID := detectSelf(ctx, engine, logger)
@@ -102,15 +103,15 @@ func newManager(ctx context.Context, l config.Layout, set *config.Set, engine ru
 		Logger:      logger,
 		Version:     buildinfo.Version,
 	})
-	mgr.SetKeepUnknown(len(set.Files) == 0)
 	state := &configState{layout: l, set: set}
+	logLoaded(logger, l, set)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	watcher, err := config.NewWatcher(l,
 		func(next *config.Set) {
-			mgr.SetKeepUnknown(len(next.Files) == 0)
 			state.loaded(next)
-			if applied, _ := applyOnce(runCtx, mgr, state, next.Config, logger); applied {
+			logLoaded(logger, l, next)
+			if applied, _ := applyOnce(runCtx, mgr, state, next, logger); applied {
 				logger.Info("configuration reloaded")
 			}
 		},
@@ -182,13 +183,48 @@ func newManager(ctx context.Context, l config.Layout, set *config.Set, engine ru
 	}, nil
 }
 
-// applyOnce applies cfg and records the outcome. A failed adoption scan
-// (manager.ErrAdoptionScan) started nothing: it returns applied=false,
-// retry=true so the caller can try again. Any other error is per-server: the
+// logLoaded logs, at info, what the operator should know about a set just
+// loaded from l: each server defined by more than one file, with those
+// files, and that no administrator file is among its files, so unknown
+// containers are kept. (Finding no file at all is the startup warning
+// instead.)
+func logLoaded(logger *slog.Logger, l config.Layout, set *config.Set) {
+	for _, s := range set.Config.Servers {
+		o := set.Origins[s.Name]
+		if len(o.Files) < 2 {
+			continue
+		}
+		paths := make([]string, len(o.Files))
+		for i, f := range o.Files {
+			paths[i] = f.Path
+		}
+		logger.Info("config: server merged", "server", s.Name, "files", strings.Join(paths, ","))
+	}
+	if len(set.Files) > 0 && len(set.AdminFiles()) == 0 {
+		admin := []string{l.BaseFile}
+		if l.SystemDir != "" {
+			admin = append(admin, l.SystemDir)
+		}
+		logger.Info(fmt.Sprintf("no administrator configuration loaded (searched: %s); unknown containers are kept",
+			strings.Join(admin, ", ")))
+	}
+}
+
+// applyOnce applies set's configuration and records the outcome. Labeled
+// containers of servers set does not define are kept when it holds no
+// administrator file (no base file, legacy file or system drop-in), so a
+// missing admin mount cannot remove the servers it defined. A failed
+// adoption scan (manager.ErrAdoptionScan) started nothing: it returns
+// applied=false, retry=true so the caller can try again. Any other error is per-server: the
 // config was applied, those servers are failed in the registry and retry on
 // their own, so it is logged and the config counts as applied.
-func applyOnce(ctx context.Context, mgr *manager.Manager, state *configState, cfg *config.Config, logger *slog.Logger) (applied, retry bool) {
-	err := mgr.Apply(ctx, cfg)
+func applyOnce(ctx context.Context, mgr *manager.Manager, state *configState, set *config.Set, logger *slog.Logger) (applied, retry bool) {
+	// The flag and the Apply that reads it are paired under applyMu, so a
+	// concurrent apply of another set cannot swap the flag in between.
+	state.applyMu.Lock()
+	mgr.SetKeepUnknown(len(set.AdminFiles()) == 0)
+	err := mgr.Apply(ctx, set.Config)
+	state.applyMu.Unlock()
 	switch {
 	case err == nil:
 	case errors.Is(err, manager.ErrAdoptionScan):
@@ -203,14 +239,14 @@ func applyOnce(ctx context.Context, mgr *manager.Manager, state *configState, cf
 	return true, false
 }
 
-// applyUntilSuccess applies the current config, retrying with a doubling
+// applyUntilSuccess applies the current set, retrying with a doubling
 // backoff while the adoption scan fails (nothing was started), until it is
-// applied or ctx ends. The config is re-read on every attempt so a reload
-// that arrives meanwhile is not overwritten by a stale one.
+// applied or ctx ends. The set is re-read on every attempt so a reload that
+// arrives meanwhile is not overwritten by a stale one.
 func applyUntilSuccess(ctx context.Context, mgr *manager.Manager, state *configState, logger *slog.Logger) {
 	backoff := applyMinBackoff
 	for {
-		applied, retry := applyOnce(ctx, mgr, state, state.Current(), logger)
+		applied, retry := applyOnce(ctx, mgr, state, state.currentSet(), logger)
 		if applied || !retry || ctx.Err() != nil {
 			return
 		}
@@ -238,17 +274,22 @@ func newLogger(w io.Writer, lc config.LogConfig) *slog.Logger {
 }
 
 // prepareUserDir creates the user drop-in directory of l and checks that it
-// can be written. notice is "" when it can, or when there is no user layer;
-// otherwise it says why editing is disabled. A directory that cannot be
-// created (or is not a directory) is dropped from the returned layout, as
+// can be written. notice is "" when it can; otherwise it says why editing is
+// disabled, including when there is no user layer. A directory that cannot
+// be created (or is not a directory) is dropped from the returned layout, as
 // there is nothing to read from it; one that exists but cannot be written
 // stays, and is still read.
 func prepareUserDir(l config.Layout) (config.Layout, string) {
 	if l.UserDir == "" {
-		return l, ""
+		return l, `editing is disabled: no user drop-in directory (--config-d "")`
 	}
 	disabled := func(err error) string {
 		return fmt.Sprintf("editing is disabled: %s is not writable (%v)", l.UserDir, err)
+	}
+	if fi, err := os.Stat(l.UserDir); err == nil && !fi.IsDir() {
+		notice := fmt.Sprintf("editing is disabled: %s is not a directory", l.UserDir)
+		l.UserDir = ""
+		return l, notice
 	}
 	if err := os.MkdirAll(l.UserDir, 0o750); err != nil {
 		notice := disabled(err)

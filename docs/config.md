@@ -202,7 +202,9 @@ configuration keeps them as written. Other fields (URLs, paths, volumes) are
 used as written.
 
 A `${NAME}` that is not set, in any of these fields, is an error that names
-the variable, and the file is rejected (at startup, or on reload, which keeps
+the variable and the servers that reference it, with the files that define
+them, for example `config: ${TOKEN} is not set (referenced by server "fetch",
+defined in /etc/mcp-machine/config.yaml (base))`, and the file is rejected (at startup, or on reload, which keeps
 the previous configuration). Supply the variables with `podman run -e NAME`, an
 `environment:` block in `compose.yaml`, or `EnvironmentFile=` in the Quadlet
 unit.
@@ -343,6 +345,13 @@ What the edit form offers depends on where the server is defined:
 - **Revert to admin definition** for an administrator's server that the UI has
   overridden: `/data/config.d/<name>.yaml` is removed and the server goes back
   to the administrator's definition.
+
+Before removing the file, delete and revert load the configuration as it will
+be without it, with MCP Machine's real environment, and validate it. If that
+fails (for example the administrator's definition references a `${VAR}` that
+is not set, which the override did not use), nothing is removed and the form
+shows the error. When another file in `/data/config.d` also defines the
+server, the form says that its definition stays in effect after the removal.
 - No button for an administrator's server without an override. The form says
   it is defined by the administrator in the files it names and can only be
   overridden by saving changes, never deleted from the UI. A delete posted
@@ -353,8 +362,9 @@ server. Any other file in `/data/config.d` (for example a hand-placed
 `team.yaml` with several servers) is foreign: it is loaded like any other, but
 the UI never rewrites or removes it. Saving one of its servers writes
 `<name>.yaml`, which then wins; deleting one is refused (409) with a message
-naming the file; adding a server whose `<name>.yaml` already exists is
-refused. When `<name>.yaml` itself is foreign (it holds another server, or
+naming the file (the form offers no delete for such a server and says to
+edit or remove the file by hand); adding a server whose `<name>.yaml` already
+exists is refused. When `<name>.yaml` itself is foreign (it holds another server, or
 more than one), editing and deleting that server are refused.
 
 ### Upgrading from `/data/config.yaml`
@@ -393,11 +403,19 @@ When no configuration file is found at all, `serve` starts with defaults and no
 servers, logs `no configuration found (searched: PATHS); running with
 defaults`, and shows the same warning on the Config page. That also applies to
 `serve -c FILE` when `FILE` ends in `.yaml` or `.yml` and does not exist (a
-missing path without that extension is taken as an admin root directory). Labeled containers of servers MCP
-Machine does not know are then left running instead of being removed, so a
-forgotten mount does not delete running servers. That protects a start
-without configuration; removing every file while MCP Machine runs stops their
-servers like any other removal. `validate` treats a missing configuration as
+missing path without that extension is taken as an admin root directory).
+
+Labeled containers of servers MCP Machine does not know are left running
+instead of being removed whenever no administrator file was loaded: no base
+file, no legacy `/data/config.yaml`, and no system drop-in. That covers
+finding nothing at all and also a start where only UI-written drop-ins in
+`/data/config.d` exist (say the `/etc/mcp-machine` mount was forgotten); in
+the latter case there is no warning banner, but MCP Machine logs at info
+`no administrator configuration loaded (searched: /etc/mcp-machine/config.yaml,
+/etc/mcp-machine/config.d); unknown containers are kept`. A base file that
+defines no servers still counts as loaded. This protects a start without the
+administrator's configuration; removing every file while MCP Machine runs
+stops their servers like any other removal. `validate` treats a missing configuration as
 an error and exits 1.
 
 ## Hot reload
@@ -417,11 +435,20 @@ parsed, an empty file, a global key in a drop-in, a name defined twice in one
 file, and a `type` mismatch between administrator files are reported with the
 file's path. A validation problem is found on the merged result, so it names
 the server instead (its **Defined in** on the Config page tells you which
-files define it), and an unset `${VAR}` names the variable. The Config page also has a Reload now button (`POST /config/reload`).
+files define it), and an unset `${VAR}` names the variable, the servers that reference it, and
+the files that define them. The same server name in several files is a merge,
+logged at info as `config: server merged` with the server and the
+contributing files. The Config page also has a Reload now button (`POST /config/reload`).
 
 Each location must be a **directory** that is bind-mounted: `/etc/mcp-machine`
 and `/data`. A bind mount of a single file, or a named volume, does not deliver
 reliable change events and is not supported for hot reload.
+
+A drop-in may be a symlink to a file elsewhere, and it is loaded through the
+link, but only the link's directory is watched: editing the link's *target*
+produces no event there and is not picked up. After editing a target, make a
+change in the link's directory (for example, re-create the link) or use
+**Reload now**.
 
 With `podman machine` (macOS, Windows) the bind mount crosses into the VM
 through virtiofs, which may not deliver inotify events for edits made on the
@@ -471,7 +498,10 @@ never written. Deleting removes that file (see
 [Delete, revert, and administrator servers](#delete-revert-and-administrator-servers)).
 
 The forms are prefilled from the files as written, so `${VAR}` references stay
-placeholders in what the UI writes and secrets are never copied into `/data`.
+placeholders in what the UI writes. A secret written literally in an
+administrator's file is a different matter: editing that server copies the
+whole definition, secret included, into `/data/config.d/<name>.yaml`. Keep
+secrets in the administrator's files as `${VAR}` placeholders.
 Files in `/data/config.d` belong to the application: the UI rewrites them
 whole, and comments or formatting added by hand there are not preserved. Keep
 commented configuration in the administrator's files. The edit forms leave
@@ -490,4 +520,6 @@ follows is harmless because reconciling is hash-based.
 At startup MCP Machine creates `/data/config.d` if it is missing. If it cannot
 be created or written, adding, editing, deleting, and importing are disabled
 and every page shows `editing is disabled: /data/config.d is not writable
-(REASON)`; everything else keeps working.
+(REASON)` (or `... is not a directory` when the path is a file, or `editing is
+disabled: no user drop-in directory (--config-d "")` when the user layer is
+turned off); everything else keeps working.

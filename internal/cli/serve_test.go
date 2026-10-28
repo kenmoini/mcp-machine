@@ -264,7 +264,7 @@ func TestServeNoConfigStartsWithWarning(t *testing.T) {
 
 func TestValidateCommand(t *testing.T) {
 	path := writeConfig(t, "servers:\n  - {name: a, type: remote, remote: {url: \"http://x/mcp\"}}\n")
-	code, out, errs := run(t, "validate", "-c", path)
+	code, out, errs := run(t, "validate", "-c", path, "--config-d", t.TempDir())
 	if code != 0 || strings.TrimSpace(out) != "ok" || errs != "" {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
 	}
@@ -272,7 +272,7 @@ func TestValidateCommand(t *testing.T) {
 
 func TestValidateCommandInvalid(t *testing.T) {
 	path := writeConfig(t, dupConfig)
-	code, out, errs := run(t, "validate", "-c", path)
+	code, out, errs := run(t, "validate", "-c", path, "--config-d", t.TempDir())
 	if code != 1 || out != "" || !strings.Contains(errs, "dup") {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
 	}
@@ -612,6 +612,55 @@ func TestServeKeepsContainersWithoutConfig(t *testing.T) {
 	waitExit(t, done, errb)
 }
 
+func TestServeKeepsContainersWithOnlyUserDropIns(t *testing.T) {
+	// The admin root is not mounted but a UI-written drop-in exists: the
+	// containers of servers only the admin files defined are kept, and the
+	// drop-in's server is served.
+	backend := pingBackend(t)
+	tmp := t.TempDir()
+	cli.SetLegacyConfigPath(t, filepath.Join(tmp, "data", "config.yaml"))
+	root, user := filepath.Join(tmp, "etc"), filepath.Join(tmp, "config.d")
+	writeAtomic(t, filepath.Join(user, "c.yaml"), remoteDropIn("c", backend.URL+"/"))
+	eng := fake.New()
+	eng.Seed(runtime.ContainerInfo{
+		ID: "seed-ghost", Name: store.ContainerName("ghost"), Image: "img:1", State: "running",
+		Labels: store.Labels("ghost", "whatever", "stdio"),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	base, done, errb := startServeArgs(ctx, t,
+		[]string{"-c", root, "--config-d", user, "-listen", "127.0.0.1:0"},
+		func(context.Context, string) (runtime.Engine, error) { return eng, nil })
+
+	waitServing(ctx, t, base, "c", errb)
+	info, err := eng.InspectContainer(ctx, "seed-ghost")
+	if err != nil {
+		t.Fatalf("ghost container gone: %v", err)
+	}
+	if info.State != "running" {
+		t.Errorf("ghost state = %q, want running", info.State)
+	}
+	for _, c := range eng.Calls() {
+		if c == "StopContainer" || c == "RemoveContainer" {
+			t.Errorf("engine call %s with no administrator configuration loaded", c)
+		}
+	}
+	want := "no administrator configuration loaded (searched: " + filepath.Join(root, "config.yaml") + ", " +
+		filepath.Join(root, "config.d") + "); unknown containers are kept"
+	if !strings.Contains(errb.String(), want) {
+		t.Errorf("stderr lacks %q:\n%s", want, errb.String())
+	}
+	if strings.Contains(errb.String(), "no configuration found") {
+		t.Errorf("stderr has the nothing-found warning:\n%s", errb.String())
+	}
+	if _, body := getBody(t, base+"/config"); strings.Contains(body, "no administrator configuration loaded") {
+		t.Errorf("config page shows the info notice:\n%s", body)
+	}
+
+	cancel()
+	waitExit(t, done, errb)
+}
+
 func TestServeLegacyFallbackWarns(t *testing.T) {
 	backend := pingBackend(t)
 	tmp := t.TempDir()
@@ -653,13 +702,13 @@ func TestServeReadOnlyUserDirDisablesEditing(t *testing.T) {
 	if code, _ := getBody(t, base+"/servers/new"); code != http.StatusServiceUnavailable {
 		t.Errorf("GET /servers/new = %d, want 503", code)
 	}
-	if want := "editing is disabled: " + notDir + " is not writable ("; !strings.Contains(errb.String(), want) {
+	if want := "editing is disabled: " + notDir + " is not a directory"; !strings.Contains(errb.String(), want) {
 		t.Errorf("stderr lacks %q:\n%s", want, errb.String())
 	}
 	// Every page explains why editing is off.
 	for _, page := range []string{"/", "/config"} {
 		_, body := getBody(t, base+page)
-		if want := "editing is disabled: " + html.EscapeString(notDir) + " is not writable ("; !strings.Contains(body, want) {
+		if want := "editing is disabled: " + html.EscapeString(notDir) + " is not a directory"; !strings.Contains(body, want) {
 			t.Errorf("GET %s lacks %q:\n%s", page, want, body)
 		}
 	}

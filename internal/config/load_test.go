@@ -154,8 +154,10 @@ func TestParseMissingEnvVarIsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing env var")
 	}
-	if !strings.Contains(err.Error(), "${TOK} is not set") {
-		t.Errorf("error = %q, want it to contain %q", err, "${TOK} is not set")
+	// The error names the servers that reference the variable, in order.
+	const want = `config: ${TOK} is not set (referenced by servers "remote1", "cmd1")`
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
 	}
 }
 
@@ -170,10 +172,9 @@ registries:
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	for _, want := range []string{"config: ${AAA} is not set", "config: ${BBB} is not set"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error = %q, want it to contain %q", err, want)
-		}
+	// Global sections name no server.
+	if want := "config: ${AAA} is not set\nconfig: ${BBB} is not set"; err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
 	}
 }
 
@@ -319,7 +320,11 @@ func TestParseChecksVarsInRunAndArgs(t *testing.T) {
 	if err == nil {
 		t.Fatal("Parse succeeded with unset variables in command.run and command.args")
 	}
-	for _, want := range []string{"${RUN_TOKEN} is not set", "${RUN_ORG} is not set", "${ARG_KEY} is not set"} {
+	for _, want := range []string{
+		`${RUN_TOKEN} is not set (referenced by server "r")`,
+		`${RUN_ORG} is not set (referenced by server "r")`,
+		`${ARG_KEY} is not set (referenced by server "a")`,
+	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %q, want it to contain %q", err, want)
 		}

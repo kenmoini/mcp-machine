@@ -282,6 +282,47 @@ func TestDirWriterDeleteRevertsOverride(t *testing.T) {
 	}
 }
 
+// Reverting is refused when the admin definition it would bring back does
+// not load with the real environment, so the next start cannot fail.
+func TestDirWriterRevertRefusedWhenResultDoesNotLoad(t *testing.T) {
+	const unset = "MCPM_TEST_REVERT_UNSET"
+	t.Setenv(unset, "")
+	if err := os.Unsetenv(unset); err != nil {
+		t.Fatal(err)
+	}
+	l := layoutDir(t, map[string]string{
+		"config.yaml":       remoteYAML("alpha", "      headers:\n        Authorization: Bearer ${"+unset+"}\n"),
+		"user.d/alpha.yaml": remoteYAML("alpha", ""),
+	})
+	mustLoad(t, l) // the override hides the unset variable today
+	p := filepath.Join(l.UserDir, "alpha.yaml")
+
+	err := dirWriter(l).DeleteServer("alpha")
+	if err == nil || !strings.Contains(err.Error(), "${"+unset+"} is not set") {
+		t.Fatalf("DeleteServer = %v, want an error naming ${%s}", err, unset)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Errorf("stat = %v, want the override still there", err)
+	}
+}
+
+// A revert whose result fails validation is refused too.
+func TestDirWriterRevertRefusedWhenResultInvalid(t *testing.T) {
+	// The system drop-in's admin definition of alpha has an invalid
+	// transport; the user override does not.
+	l := layoutDir(t, map[string]string{
+		"config.d/alpha.yaml": remoteYAML("alpha", "      transport: bogus\n"),
+		"user.d/alpha.yaml":   remoteYAML("alpha", ""),
+	})
+	p := filepath.Join(l.UserDir, "alpha.yaml")
+	if err := dirWriter(l).DeleteServer("alpha"); err == nil || !strings.Contains(err.Error(), "remote.transport must be") {
+		t.Fatalf("DeleteServer = %v, want the validation error", err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Errorf("stat = %v, want the override still there", err)
+	}
+}
+
 func TestDirWriterDeleteAdminRefused(t *testing.T) {
 	l := layoutDir(t, map[string]string{
 		"config.yaml":        remoteYAML("alpha", ""),

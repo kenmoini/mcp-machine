@@ -5,3 +5,6 @@ bin/
 .superpowers/
 coverage.out
 coverage.html
+# Created by the compose quick start in the checkout; config may hold secrets.
+/config/
+/data/
