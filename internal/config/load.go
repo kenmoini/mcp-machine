@@ -29,17 +29,48 @@ var defaultRuntimes = map[string]string{
 // Parse decodes YAML config data, applies defaults, and expands ${VAR}
 // references using lookup. Unknown keys and unset variables are errors.
 func Parse(data []byte, lookup func(string) (string, bool)) (*Config, error) {
+	c, err := decode(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := finish(c, lookup); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// decode strictly decodes YAML config data. Unknown keys are errors and an
+// empty document yields a zero Config. No defaults are applied and no
+// variables are expanded.
+func decode(data []byte) (*Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	c := &Config{}
 	if err := dec.Decode(c); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("config: parse: %w", err)
 	}
-	ApplyDefaults(c)
-	if err := expandEnv(c, lookup); err != nil {
-		return nil, err
-	}
 	return c, nil
+}
+
+// finish applies defaults to c and expands ${VAR} references using lookup.
+func finish(c *Config, lookup func(string) (string, bool)) error {
+	ApplyDefaults(c)
+	return expandEnv(c, lookup)
+}
+
+// decodeDropIn strictly decodes a drop-in file, which may hold only a
+// servers list. A global key is an error naming the key. No defaults are
+// applied and no variables are expanded.
+func decodeDropIn(data []byte) ([]ServerSpec, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	var d struct {
+		Servers []ServerSpec `yaml:"servers"`
+	}
+	if err := dec.Decode(&d); err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("config: parse: %w", err)
+	}
+	return d.Servers, nil
 }
 
 // errEmptyFile reports a config file with no content.
