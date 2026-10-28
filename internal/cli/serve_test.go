@@ -70,13 +70,13 @@ var listeningRE = regexp.MustCompile(`listening on (https?://\S+)`)
 
 // startServe runs "serve" in a goroutine and returns the printed base URL and
 // a channel that yields the exit code.
-func startServe(t *testing.T, ctx context.Context, cfgPath string) (string, <-chan int, *syncBuffer) {
+func startServe(ctx context.Context, t *testing.T, cfgPath string) (string, <-chan int, *syncBuffer) {
 	t.Helper()
-	return startServeWith(t, ctx, cfgPath, fakeEngine)
+	return startServeWith(ctx, t, cfgPath, fakeEngine)
 }
 
 // startServeWith is startServe with a caller-supplied engine factory.
-func startServeWith(t *testing.T, ctx context.Context, cfgPath string,
+func startServeWith(ctx context.Context, t *testing.T, cfgPath string,
 	newEngine func(context.Context, string) (runtime.Engine, error)) (string, <-chan int, *syncBuffer) {
 	t.Helper()
 	var out, errb syncBuffer
@@ -116,7 +116,7 @@ func TestServeHealthzAndShutdown(t *testing.T) {
 	path := writeConfig(t, "listen: 127.0.0.1:0\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	base, done, errb := startServe(t, ctx, path)
+	base, done, errb := startServe(ctx, t, path)
 
 	resp, err := http.Get(base + "/healthz")
 	if err != nil {
@@ -175,7 +175,7 @@ func TestServeTLS(t *testing.T) {
 	path := writeConfig(t, fmt.Sprintf("listen: 127.0.0.1:0\ntls:\n  cert_file: %s\n  key_file: %s\n", certFile, keyFile))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	base, done, errb := startServe(t, ctx, path)
+	base, done, errb := startServe(ctx, t, path)
 	if !strings.HasPrefix(base, "https://") {
 		t.Fatalf("base = %q, want https", base)
 	}
@@ -308,7 +308,7 @@ func TestServeReconcilesAndReloads(t *testing.T) {
 	path := writeConfig(t, fmt.Sprintf("listen: 127.0.0.1:0\nservers:\n  - {name: a, type: remote, remote: {url: %q}}\n", backend.URL+"/"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	base, done, errb := startServe(t, ctx, path)
+	base, done, errb := startServe(ctx, t, path)
 
 	// The server becomes ready asynchronously after the first Apply.
 	var names []string
@@ -358,7 +358,7 @@ func TestServeReadyzWaitsForApply(t *testing.T) {
 	path := writeConfig(t, "listen: 127.0.0.1:0\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	base, done, errb := startServeWith(t, ctx, path, func(context.Context, string) (runtime.Engine, error) { return eng, nil })
+	base, done, errb := startServeWith(ctx, t, path, func(context.Context, string) (runtime.Engine, error) { return eng, nil })
 
 	if code, body := getBody(t, base+"/readyz"); code != http.StatusServiceUnavailable {
 		t.Fatalf("readyz before first Apply = %d %q, want 503", code, body)
@@ -383,7 +383,7 @@ func TestServeReloadErrorIsRecorded(t *testing.T) {
 	path := writeConfig(t, "listen: 127.0.0.1:0\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	base, done, errb := startServe(t, ctx, path)
+	base, done, errb := startServe(ctx, t, path)
 
 	if err := os.WriteFile(path, []byte("servers: [this is: not valid: yaml\n"), 0o600); err != nil {
 		t.Fatal(err)

@@ -94,6 +94,11 @@ func TestContainerfileStages(t *testing.T) {
 			t.Errorf("Containerfile has bare %q", l)
 		}
 	}
+	// The pinned `toolchain` in go.mod is newer than the base image's Go, so
+	// the build stage must be allowed to fetch it.
+	if !strings.Contains(cf, "GOTOOLCHAIN=auto") {
+		t.Errorf("Containerfile build stage missing GOTOOLCHAIN=auto")
+	}
 	if !strings.Contains(cf, `CMD ["serve","-c","/data/config.yaml"]`) {
 		t.Errorf("Containerfile missing the default CMD")
 	}

@@ -34,7 +34,8 @@ func TestDialIOListsTools(t *testing.T) {
 		t.Error("stream still open after the session closed")
 	}
 	select {
-	case <-srvDone:
+	case err := <-srvDone:
+		t.Logf("backend run ended: %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("backend still running after the session closed")
 	}

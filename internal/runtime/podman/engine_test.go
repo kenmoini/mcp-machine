@@ -28,7 +28,7 @@ func TestConnWriteFailsAfterAttachEnds(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Write blocked after the attachment ended")
 	}
-	if _, err := c.Read(make([]byte, 1)); err != io.EOF {
+	if _, err := c.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
 		t.Fatalf("Read = %v, want EOF", err)
 	}
 }

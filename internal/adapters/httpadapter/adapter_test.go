@@ -117,7 +117,7 @@ func TestStreamableListTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	var names []string
+	names := make([]string, 0, len(res.Tools))
 	for _, tool := range res.Tools {
 		names = append(names, tool.Name)
 	}
@@ -228,7 +228,7 @@ func TestSSEListTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	var names []string
+	names := make([]string, 0, len(res.Tools))
 	for _, tool := range res.Tools {
 		names = append(names, tool.Name)
 	}

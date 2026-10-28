@@ -158,7 +158,7 @@ func formFromSpec(s config.ServerSpec) url.Values {
 	}
 	join := func(k string, items []string) { set(k, strings.Join(items, "\n")) }
 	mapLines := func(k, sep string, m map[string]string) {
-		var out []string
+		out := make([]string, 0, len(m))
 		for _, key := range slices.Sorted(maps.Keys(m)) {
 			out = append(out, key+sep+m[key])
 		}

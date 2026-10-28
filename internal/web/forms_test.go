@@ -372,6 +372,9 @@ func hiddenFields(t *testing.T, body string) url.Values {
 	out := url.Values{}
 	for _, part := range strings.Split(body, `<input type="hidden"`)[1:] {
 		end := strings.Index(part, ">")
+		if end < 0 {
+			t.Fatalf("unterminated hidden input in %q", part)
+		}
 		tag := part[:end]
 		get := func(attr string) string {
 			i := strings.Index(tag, attr+`="`)
@@ -379,8 +382,12 @@ func hiddenFields(t *testing.T, body string) url.Values {
 				return ""
 			}
 			rest := tag[i+len(attr)+2:]
+			q := strings.Index(rest, `"`)
+			if q < 0 {
+				return ""
+			}
 			return strings.NewReplacer("&#34;", `"`, "&lt;", "<", "&gt;", ">", "&amp;", "&", "&#39;", "'", "&#43;", "+").
-				Replace(rest[:strings.Index(rest, `"`)])
+				Replace(rest[:q])
 		}
 		out.Add(get("name"), get("value"))
 	}

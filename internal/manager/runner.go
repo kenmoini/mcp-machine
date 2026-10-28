@@ -590,7 +590,7 @@ func (r *runner) create(ctx context.Context) {
 func (r *runner) clearName(ctx context.Context, name string) error {
 	info, err := r.m.engine.InspectContainer(ctx, name)
 	if err != nil {
-		return nil // not found, or unknown: CreateContainer reports any real problem
+		return nil //nolint:nilerr // not found, or unknown: CreateContainer reports any real problem
 	}
 	managed, labelled := info.Labels[store.LabelManaged]
 	switch {

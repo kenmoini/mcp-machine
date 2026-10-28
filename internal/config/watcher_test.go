@@ -125,7 +125,7 @@ func TestWatcherInvalidYAMLCallsOnErrorOnly(t *testing.T) {
 	if err := os.WriteFile(h.path, []byte("listen: ["), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	h.expectError(t)
+	_ = h.expectError(t)
 	h.expectNoChange(t)
 }
 

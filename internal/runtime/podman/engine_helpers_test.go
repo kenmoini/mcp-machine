@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
@@ -37,7 +36,7 @@ func TestMapErr(t *testing.T) {
 	for _, code := range []int{http.StatusConflict, http.StatusInternalServerError, http.StatusBadRequest} {
 		in := &errorhandling.ErrorModel{Message: "x", ResponseCode: code}
 		out := mapErr(in)
-		if out != error(in) {
+		if !errors.Is(out, error(in)) {
 			t.Errorf("code %d: error should pass through unchanged, got %v", code, out)
 		}
 		if errors.Is(out, runtime.ErrNotFound) {
@@ -46,7 +45,7 @@ func TestMapErr(t *testing.T) {
 	}
 
 	plain := errors.New("boom")
-	if out := mapErr(plain); out != plain {
+	if out := mapErr(plain); !errors.Is(out, plain) {
 		t.Errorf("non-ErrorModel error should pass through, got %v", out)
 	}
 }
@@ -65,18 +64,23 @@ func TestInspectPorts(t *testing.T) {
 		"/tcp":      {{HostIP: "0.0.0.0", HostPort: "1235"}}, // empty container port: skipped
 		"7000":      {{HostIP: "1.2.3.4", HostPort: "7001"}}, // no protocol: kept, empty proto
 		"6000/tcp":  nil,                                     // no bindings: nothing emitted
+		"80/udp":    {{HostIP: "0.0.0.0", HostPort: "8081"}},
+		"80/tcp": { // ties on container port and protocol break by host IP, then host port
+			{HostIP: "127.0.0.1", HostPort: "8082"},
+			{HostIP: "0.0.0.0", HostPort: "8090"},
+			{HostIP: "127.0.0.1", HostPort: "8080"},
+		},
 	}
 	got := inspectPorts(in)
-	// Map iteration order is not part of inspectPorts' contract; normalise.
-	slices.SortFunc(got, func(a, b runtime.PortMapping) int {
-		if a.ContainerPort != b.ContainerPort {
-			return a.ContainerPort - b.ContainerPort
-		}
-		return a.HostPort - b.HostPort
-	})
+	// inspectPorts sorts by container port, protocol, host IP, host port, so
+	// the result is compared as returned, with no sorting here.
 	want := []runtime.PortMapping{
 		{HostIP: "", HostPort: 5353, ContainerPort: 53, Protocol: "udp"},
 		{HostIP: "::1", HostPort: 5354, ContainerPort: 53, Protocol: "udp"},
+		{HostIP: "0.0.0.0", HostPort: 8090, ContainerPort: 80, Protocol: "tcp"},
+		{HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
+		{HostIP: "127.0.0.1", HostPort: 8082, ContainerPort: 80, Protocol: "tcp"},
+		{HostIP: "0.0.0.0", HostPort: 8081, ContainerPort: 80, Protocol: "udp"},
 		{HostIP: "127.0.0.1", HostPort: 49152, ContainerPort: 3000, Protocol: "tcp"},
 		{HostIP: "1.2.3.4", HostPort: 7001, ContainerPort: 7000, Protocol: ""},
 	}

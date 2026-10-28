@@ -11,9 +11,12 @@ ARG MCPM_DATE=unknown
 
 # The go-toolset image runs as a non-root user with HOME=/opt/app-root/src, so
 # keep every Go cache and module write under paths that user can write.
+# GOTOOLCHAIN=auto lets the go command fetch the `toolchain` pinned in go.mod
+# (newer than the base image's Go, for patched stdlib); it needs network.
 ENV CGO_ENABLED=0 \
     GOFLAGS=-mod=mod \
-    GOCACHE=/tmp/gocache
+    GOCACHE=/tmp/gocache \
+    GOTOOLCHAIN=auto
 
 WORKDIR /src
 

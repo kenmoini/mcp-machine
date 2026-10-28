@@ -98,7 +98,7 @@ func TestFacadeMirrorsLists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
+	names := make([]string, 0, len(tools.Tools))
 	for _, tl := range tools.Tools {
 		names = append(names, tl.Name)
 		if tl.InputSchema == nil {
@@ -374,7 +374,7 @@ func TestFacadeResyncReplacesAndRemoves(t *testing.T) {
 
 // rewriteLists makes the backend advertise definitions that the SDK's own
 // registration API would refuse, like a misbehaving third-party server.
-func rewriteLists(backend *mcp.Server, rewrite func(method string, res mcp.Result)) {
+func rewriteLists(backend *mcp.Server, rewrite func(_ string, res mcp.Result)) {
 	backend.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			res, err := next(ctx, method, req)
@@ -394,7 +394,7 @@ func TestFacadeDefaultsNilInputSchema(t *testing.T) {
 				return &mcp.CallToolResult{}, nil
 			})
 	}
-	rewriteLists(backend, func(method string, res mcp.Result) {
+	rewriteLists(backend, func(_ string, res mcp.Result) {
 		if r, ok := res.(*mcp.ListToolsResult); ok {
 			for _, tl := range r.Tools {
 				if tl.Name == "nilschema" {
@@ -451,7 +451,7 @@ func TestFacadeSkipsUnregisterableDefinitions(t *testing.T) {
 		func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 			return &mcp.ReadResourceResult{}, nil
 		})
-	rewriteLists(backend, func(method string, res mcp.Result) {
+	rewriteLists(backend, func(_ string, res mcp.Result) {
 		switch r := res.(type) {
 		case *mcp.ListToolsResult:
 			for _, tl := range r.Tools {
@@ -491,7 +491,7 @@ func TestFacadeSkipsUnregisterableDefinitions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
+	names := make([]string, 0, len(tools.Tools))
 	for _, tl := range tools.Tools {
 		names = append(names, tl.Name)
 	}
@@ -537,7 +537,7 @@ func toolNames(t *testing.T, c *mcp.ClientSession) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
+	names := make([]string, 0, len(res.Tools))
 	for _, tl := range res.Tools {
 		names = append(names, tl.Name)
 	}

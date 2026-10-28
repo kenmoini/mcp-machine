@@ -51,7 +51,7 @@ var errEmptyFile = errors.New("config: file is empty")
 // environment variable MCP_MACHINE_PODMAN_SOCKET, when set, overrides
 // podman.socket.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is the operator-chosen config file
 	if err != nil {
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
 	}

@@ -32,11 +32,12 @@ func toSpecGen(s runtime.ContainerSpec) *specgen.SpecGenerator {
 		g.Networks = map[string]nettypes.PerNetworkOptions{s.Network: {}}
 	}
 
+	// Ports are range-checked (0..65535) where specs are resolved.
 	for _, p := range s.Ports {
 		g.PortMappings = append(g.PortMappings, nettypes.PortMapping{
 			HostIP:        p.HostIP,
-			HostPort:      uint16(p.HostPort),
-			ContainerPort: uint16(p.ContainerPort),
+			HostPort:      uint16(p.HostPort),      //nolint:gosec // G115: validated to fit in 16 bits by the source resolvers
+			ContainerPort: uint16(p.ContainerPort), //nolint:gosec // G115: validated to fit in 16 bits by the source resolvers
 			Protocol:      p.Protocol,
 		})
 	}

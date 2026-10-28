@@ -1,5 +1,7 @@
 # MCP Machine
 
+[![CI](https://github.com/kenmoini/mcp-machine/actions/workflows/ci.yaml/badge.svg)](https://github.com/kenmoini/mcp-machine/actions/workflows/ci.yaml)
+
 MCP Machine is a small self-hosted web app, shipped as one container, that runs your MCP servers as sibling Podman containers and proxies each one to clients over Streamable HTTP, legacy HTTP+SSE, and stdio. You describe servers in one hand-editable YAML file (or through the web UI): a remote endpoint, a client-style command such as `npx`, `uvx`, or `docker run`, or a git repository with a Containerfile. Configure a server once on a homelab box and every client on every laptop can use it a few seconds later.
 
 ## Status
@@ -148,7 +150,12 @@ One YAML file, `/data/config.yaml` in the container, hot-reloaded when it change
 | `make test` | Unit tests. |
 | `make test-race` | Unit tests with the race detector. |
 | `make test-integration` | Tests against a real Podman socket (needs `MCP_MACHINE_PODMAN_SOCKET`). |
-| `make lint` | `go vet` and `staticcheck`. |
+| `make vet` | `go vet`. |
+| `make lint` | `golangci-lint run` using `.golangci.yml` (install with `make tools`). |
+| `make vuln` | `govulncheck` over reachable code. |
+| `make cover` | Coverage profile `coverage.out`, a summary, and `coverage.html`. |
+| `make check` | `fmt-check`, `lint`, `vuln`, and `test` in one go. |
+| `make tools` | Install the pinned `golangci-lint` and `govulncheck`. |
 | `make fmt`, `make fmt-check` | Format with gofmt, or fail if anything needs formatting. |
 | `make run` | Build and run `serve` (reads `/data/config.yaml`; for another file run `./bin/mcp-machine serve -c config.yaml`). |
 | `make validate` | Build and run `validate` (reads `/data/config.yaml` unless you run the binary with `-c`). |
@@ -157,16 +164,19 @@ One YAML file, `/data/config.yaml` in the container, hot-reloaded when it change
 | `make compose-up`, `make compose-down` | Start or stop the Compose deployment. |
 | `make quadlet-install` | Copy the Quadlet units to `$(QUADLET_DIR)` (default `/etc/containers/systemd`) and run `$(SYSTEMCTL) daemon-reload`. |
 | `make htmx-vendor` | Re-download and checksum-verify the vendored htmx 2.0.10. |
-| `make clean` | Remove `bin/`. |
+| `make clean` | Remove `bin/` and the coverage files. |
 
 ## Development
 
 Go 1.26 or newer is required.
 
 ```sh
-make lint test
+make tools   # one time: installs golangci-lint and govulncheck
+make check   # format check, lint, vulnerability scan, tests
 make test-race
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the make targets, commit convention, and pull request checklist.
 
 Unit tests never touch a socket; they use an in-memory fake engine. Integration tests run against a real Podman and are skipped unless a socket is given:
 

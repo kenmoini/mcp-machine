@@ -1,0 +1,89 @@
+version: "2"
+
+run:
+  go: "1.26"
+  tests: true
+  build-tags:
+    - remote
+    - containers_image_openpgp
+    - exclude_graphdriver_btrfs
+    - exclude_graphdriver_devicemapper
+    - integration # lint test/integration too
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - gosec
+    - revive
+    - misspell
+    - gocritic
+    - unparam
+    - unconvert
+    - prealloc
+    - nilerr
+    - errorlint
+    - bodyclose
+    - copyloopvar
+    - depguard
+  settings:
+    depguard:
+      rules:
+        sdk:
+          # Only the proxy, the transport adapters and the manager may speak
+          # the MCP SDK directly. Tests may import it to drive the code.
+          list-mode: lax
+          files:
+            - "$all"
+            - "!**/*_test.go"
+            - "!**/internal/proxy/**"
+            - "!**/internal/adapters/**"
+            - "!**/internal/manager/**"
+          deny:
+            - pkg: github.com/modelcontextprotocol/go-sdk
+              desc: only internal/proxy, internal/adapters and internal/manager may import the MCP SDK
+        podman:
+          list-mode: lax
+          files:
+            - "$all"
+            - "!**/internal/runtime/podman/**"
+          deny:
+            - pkg: go.podman.io
+              desc: only internal/runtime/podman may import the Podman libraries
+        errors:
+          list-mode: lax
+          files:
+            - "$all"
+          deny:
+            - pkg: github.com/pkg/errors
+              desc: use the standard library errors package and fmt.Errorf with %w
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+        text: "G101|G104|G107|G122|G204|G301|G302|G304|G306|G404|G703"
+      - path: _test\.go
+        linters:
+          - errcheck
+        source: "\\.(Close|Remove|RemoveAll|Shutdown)\\("
+      - path: _test\.go
+        linters:
+          - unparam
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/kenmoini/mcp-machine
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

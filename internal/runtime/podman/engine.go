@@ -4,11 +4,13 @@
 package podman
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -144,9 +146,9 @@ func (e *Engine) BuildImage(ctx context.Context, req runtime.BuildRequest) (stri
 	c, done := e.ctx(ctx)
 	defer done()
 
-	var labels []string
-	for k, v := range req.Labels {
-		labels = append(labels, k+"="+v)
+	labels := make([]string, 0, len(req.Labels))
+	for _, k := range slices.Sorted(maps.Keys(req.Labels)) {
+		labels = append(labels, k+"="+req.Labels[k])
 	}
 	bo := buildahDefine.BuildOptions{
 		ContextDirectory: req.ContextDir,
@@ -259,7 +261,9 @@ func sortedNetworkNames(m map[string]*define.InspectAdditionalNetwork) []string 
 }
 
 // inspectPorts converts inspect-style port bindings ("3000/tcp" ->
-// [{HostIP, HostPort}]) into runtime port mappings.
+// [{HostIP, HostPort}]) into runtime port mappings. The result is sorted by
+// container port, protocol, host IP, then host port, so it is deterministic
+// despite the map input.
 func inspectPorts(m map[string][]define.InspectHostPort) []runtime.PortMapping {
 	var out []runtime.PortMapping
 	for key, binds := range m {
@@ -276,6 +280,14 @@ func inspectPorts(m map[string][]define.InspectHostPort) []runtime.PortMapping {
 			out = append(out, runtime.PortMapping{HostIP: b.HostIP, HostPort: hport, ContainerPort: cport, Protocol: proto})
 		}
 	}
+	slices.SortFunc(out, func(a, b runtime.PortMapping) int {
+		return cmp.Or(
+			cmp.Compare(a.ContainerPort, b.ContainerPort),
+			cmp.Compare(a.Protocol, b.Protocol),
+			cmp.Compare(a.HostIP, b.HostIP),
+			cmp.Compare(a.HostPort, b.HostPort),
+		)
+	})
 	return out
 }
 

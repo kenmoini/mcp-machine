@@ -3,3 +3,5 @@ bin/
 .env
 .gocache/
 .superpowers/
+coverage.out
+coverage.html

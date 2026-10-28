@@ -142,7 +142,7 @@ func (f *Facade) ClientOptions() *mcp.ClientOptions {
 // own error messages, pass through unchanged.
 func backendErr(err error) error {
 	if errors.Is(err, mcp.ErrConnectionClosed) {
-		return fmt.Errorf("%w: %v", ErrBackendUnavailable, err)
+		return fmt.Errorf("%w: %w", ErrBackendUnavailable, err)
 	}
 	return err
 }

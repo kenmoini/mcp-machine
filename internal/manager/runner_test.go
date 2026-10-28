@@ -309,7 +309,7 @@ func listTools(t *testing.T, srv *mcp.Server) []string {
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
-	var names []string
+	names := make([]string, 0, len(res.Tools))
 	for _, tl := range res.Tools {
 		names = append(names, tl.Name)
 	}

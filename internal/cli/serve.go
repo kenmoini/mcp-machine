@@ -72,8 +72,8 @@ func detectSelf(ctx context.Context, engine runtime.Engine, logger *slog.Logger)
 }
 
 const (
-	applyBackoffMin = time.Second
-	applyBackoffMax = 30 * time.Second
+	applyMinBackoff = time.Second
+	applyMaxBackoff = 30 * time.Second
 )
 
 // newManager builds the server manager and starts what keeps it in step with
@@ -200,7 +200,7 @@ func applyOnce(ctx context.Context, mgr *manager.Manager, state *configState, cf
 // applied or ctx ends. The config is re-read on every attempt so a reload
 // that arrives meanwhile is not overwritten by a stale one.
 func applyUntilSuccess(ctx context.Context, mgr *manager.Manager, state *configState, logger *slog.Logger) {
-	backoff := applyBackoffMin
+	backoff := applyMinBackoff
 	for {
 		applied, retry := applyOnce(ctx, mgr, state, state.Current(), logger)
 		if applied || !retry || ctx.Err() != nil {
@@ -212,7 +212,7 @@ func applyUntilSuccess(ctx context.Context, mgr *manager.Manager, state *configS
 			return
 		case <-time.After(backoff):
 		}
-		backoff = min(backoff*2, applyBackoffMax)
+		backoff = min(backoff*2, applyMaxBackoff)
 	}
 }
 

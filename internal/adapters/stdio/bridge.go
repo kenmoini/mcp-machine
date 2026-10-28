@@ -30,7 +30,8 @@ func Run(ctx context.Context, url string, in io.ReadCloser, out io.WriteCloser, 
 	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: url}, nil)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil
+			// Shutdown was requested while connecting; that is not a failure.
+			return nil //nolint:nilerr // a cancelled context is a clean exit, not an error
 		}
 		return fmt.Errorf("connect to %s: %w", url, err)
 	}

@@ -19,7 +19,7 @@ const SelfIDEnv = "MCP_MACHINE_CONTAINER_ID"
 // line only for privileged containers, so id is often empty even when
 // inContainer is true; ResolveSelfID fills the gap.
 func DetectSelf(containerenvPath string) (id string, inContainer bool) {
-	f, err := os.Open(containerenvPath)
+	f, err := os.Open(containerenvPath) //nolint:gosec // G304: caller passes the fixed /run/.containerenv path (a variable only for tests)
 	if err != nil {
 		return "", false
 	}

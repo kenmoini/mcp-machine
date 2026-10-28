@@ -21,7 +21,18 @@ HTMX_URL    = https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js
 HTMX_FILE   = internal/web/static/htmx.min.js
 HTMX_SHA256 = 71ea67185bfa8c98c39d31717c6fce5d852370fcdfd129db4543774d3145c0de
 
-.PHONY: build test test-race test-integration lint fmt fmt-check run validate image push \
+GOLANGCI_LINT_VERSION ?= v2.15.0
+GOBIN_DIR := $(shell go env GOPATH)/bin
+export PATH := $(GOBIN_DIR):$(PATH)
+
+# The go.mod toolchain line (go1.27.3) is honoured when GOTOOLCHAIN is unset or
+# "auto". Some shells export it empty, which pins the local toolchain; restore
+# the default so builds, tests and govulncheck use the patched toolchain.
+ifeq ($(GOTOOLCHAIN),)
+export GOTOOLCHAIN := auto
+endif
+
+.PHONY: build test test-race test-integration vet lint fmt fmt-check vuln cover check tools run validate image push \
 	compose-up compose-down quadlet-install htmx-vendor clean
 
 build:
@@ -36,8 +47,30 @@ test-race:
 test-integration:
 	go test -tags $(GOTAGS),integration -count=1 ./test/integration/...
 
+vet:
+	go vet -tags $(GOTAGS) ./...
+
 lint:
-	go vet -tags $(GOTAGS) ./... && go tool staticcheck -tags $(GOTAGS) ./...
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+		echo "golangci-lint not found on PATH or in $(GOBIN_DIR); run 'make tools' to install it" >&2; exit 1; }
+	golangci-lint run ./...
+
+vuln:
+	@command -v govulncheck >/dev/null 2>&1 || { \
+		echo "govulncheck not found on PATH or in $(GOBIN_DIR); run 'make tools' to install it" >&2; exit 1; }
+	govulncheck -tags $(GOTAGS) ./...
+
+cover:
+	go test -tags $(GOTAGS) -count=1 -coverprofile=coverage.out ./...
+	go tool cover -func=coverage.out | tail -n 1
+	go tool cover -html=coverage.out -o coverage.html
+
+# Everything CI runs, in the same order the jobs would fail fastest.
+check: fmt-check lint vuln test
+
+tools:
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	go install golang.org/x/vuln/cmd/govulncheck@latest
 
 fmt:
 	gofmt -w cmd internal test
@@ -77,4 +110,4 @@ htmx-vendor:
 	@echo "$(HTMX_SHA256)  $(HTMX_FILE)" | shasum -a 256 -c -
 
 clean:
-	rm -rf bin
+	rm -rf bin coverage.out coverage.html

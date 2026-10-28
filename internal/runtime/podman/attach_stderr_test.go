@@ -28,7 +28,7 @@ func (h *recordingHandler) lines(t *testing.T, wantID string) []string {
 	t.Helper()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	var out []string
+	out := make([]string, 0, len(h.recs))
 	for _, r := range h.recs {
 		if r.Level != slog.LevelDebug {
 			t.Errorf("level = %v, want Debug", r.Level)

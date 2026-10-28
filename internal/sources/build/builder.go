@@ -43,7 +43,7 @@ func (b *Builder) Build(ctx context.Context, plan sources.BuildPlan, force bool)
 	if err := os.RemoveAll(dir); err != nil {
 		return "", fmt.Errorf("clean %s: %w", dir, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o750); err != nil {
 		return "", fmt.Errorf("create workspace for %s: %w", plan.Name, err)
 	}
 	sha, err := b.Cloner.Clone(ctx, plan.Repo, plan.Ref, dir, plan.Auth)
@@ -150,7 +150,7 @@ func contained(root, rel string) (string, error) {
 // ARG references are expanded from args; unresolved ones are skipped. It
 // returns "" if there is none.
 func baseImage(path string, args map[string]string) (string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: path is the Containerfile inside the workspace this builder just cloned
 	if err != nil {
 		return "", fmt.Errorf("read containerfile: %w", err)
 	}

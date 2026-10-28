@@ -330,7 +330,7 @@ func TestAPIServersJSON(t *testing.T) {
 	}
 }
 
-func TestTemplatesParse(t *testing.T) {
+func TestTemplatesParse(_ *testing.T) {
 	_ = web.New(web.Deps{Registry: store.NewRegistry()})
 }
 

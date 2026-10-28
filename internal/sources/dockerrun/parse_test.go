@@ -205,7 +205,7 @@ func FuzzParse(f *testing.F) {
 	} {
 		f.Add(seed)
 	}
-	f.Fuzz(func(t *testing.T, line string) {
+	f.Fuzz(func(_ *testing.T, line string) {
 		_, _ = dockerrun.Parse(line)
 	})
 }

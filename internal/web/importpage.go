@@ -161,7 +161,7 @@ func postedEntries(form url.Values) ([]config.ServerSpec, []string) {
 		}
 		byIndex[i][field] = vals
 	}
-	var specs []config.ServerSpec
+	specs := make([]config.ServerSpec, 0, len(byIndex))
 	var problems []string
 	for _, i := range slices.Sorted(maps.Keys(byIndex)) {
 		s, err := specFromForm(byIndex[i])

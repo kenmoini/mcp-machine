@@ -66,20 +66,20 @@ func newUpstream(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func toolNames(t *testing.T, ctx context.Context, cs *mcp.ClientSession) []string {
+func toolNames(ctx context.Context, t *testing.T, cs *mcp.ClientSession) []string {
 	t.Helper()
 	res, err := cs.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	var names []string
+	names := make([]string, 0, len(res.Tools))
 	for _, tool := range res.Tools {
 		names = append(names, tool.Name)
 	}
 	return names
 }
 
-func connectClient(t *testing.T, ctx context.Context, rwc io.ReadWriteCloser) *mcp.ClientSession {
+func connectClient(ctx context.Context, t *testing.T, rwc io.ReadWriteCloser) *mcp.ClientSession {
 	t.Helper()
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "1"}, nil).
 		Connect(ctx, &mcp.IOTransport{Reader: rwc, Writer: rwc}, nil)
@@ -109,9 +109,9 @@ func TestBridgeListTools(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, srv.URL+"/servers/demo/mcp", a, a, quiet) }()
 
-	cs := connectClient(t, ctx, b)
+	cs := connectClient(ctx, t, b)
 	defer cs.Close()
-	if got := toolNames(t, ctx, cs); len(got) != 1 || got[0] != "ping" {
+	if got := toolNames(ctx, t, cs); len(got) != 1 || got[0] != "ping" {
 		t.Fatalf("tools = %v, want [ping]", got)
 	}
 	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "ping"})
@@ -133,9 +133,9 @@ func TestBridgeStopsOnContextCancel(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, srv.URL+"/servers/demo/mcp", a, a, quiet) }()
 
-	cs := connectClient(t, ctx, b)
+	cs := connectClient(ctx, t, b)
 	defer cs.Close()
-	_ = toolNames(t, ctx, cs)
+	_ = toolNames(ctx, t, cs)
 
 	cancel()
 	if err := waitDone(t, done, 3*time.Second); err != nil {
@@ -163,8 +163,8 @@ func TestRunListTools(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, newBackend(t), a, a, quiet) }()
 
-	cs := connectClient(t, ctx, b)
-	if got := toolNames(t, ctx, cs); len(got) != 1 || got[0] != "ping" {
+	cs := connectClient(ctx, t, b)
+	if got := toolNames(ctx, t, cs); len(got) != 1 || got[0] != "ping" {
 		t.Fatalf("tools = %v, want [ping]", got)
 	}
 	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "ping"})
@@ -188,9 +188,9 @@ func TestRunStopsOnContextCancel(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, newBackend(t), a, a, quiet) }()
 
-	cs := connectClient(t, ctx, b)
+	cs := connectClient(ctx, t, b)
 	defer cs.Close()
-	_ = toolNames(t, ctx, cs)
+	_ = toolNames(ctx, t, cs)
 
 	cancel()
 	if err := waitDone(t, done, 3*time.Second); err != nil {
@@ -203,8 +203,8 @@ func TestRunStopsWhenStdioCloses(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- run(context.Background(), newBackend(t), a, a, quiet) }()
 
-	cs := connectClient(t, context.Background(), b)
-	_ = toolNames(t, context.Background(), cs)
+	cs := connectClient(context.Background(), t, b)
+	_ = toolNames(context.Background(), t, cs)
 	_ = cs.Close() // closes b: the bridge's stdin reaches EOF
 
 	if err := waitDone(t, done, 3*time.Second); err != nil {
@@ -219,9 +219,9 @@ func TestRunStopsWhenUpstreamCloses(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- run(context.Background(), up, a, a, quiet) }()
 
-	cs := connectClient(t, context.Background(), b)
+	cs := connectClient(context.Background(), t, b)
 	defer cs.Close()
-	_ = toolNames(t, context.Background(), cs)
+	_ = toolNames(context.Background(), t, cs)
 
 	_ = up.Close()
 	if err := waitDone(t, done, 3*time.Second); err == nil {
@@ -239,9 +239,9 @@ func TestRunStopsOnCancelWithUncloseableStdin(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, newBackend(t), io.NopCloser(a), a, quiet) }()
 
-	cs := connectClient(t, ctx, b)
+	cs := connectClient(ctx, t, b)
 	defer cs.Close()
-	_ = toolNames(t, ctx, cs)
+	_ = toolNames(ctx, t, cs)
 
 	cancel()
 	if err := waitDone(t, done, 3*time.Second); err != nil {

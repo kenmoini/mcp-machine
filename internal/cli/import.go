@@ -33,7 +33,7 @@ func runImport(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if path := fs.Arg(0); path == "-" {
 		data, err = io.ReadAll(stdin)
 	} else {
-		data, err = os.ReadFile(path)
+		data, err = os.ReadFile(path) //nolint:gosec // G304: reading the file the operator named on the command line is the purpose of this command
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "mcp-machine import: %v\n", err)

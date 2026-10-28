@@ -293,7 +293,7 @@ func writeAtomic(path string, data []byte, mode os.FileMode) (err error) {
 	}
 	// The file is in place; failing to sync the directory only weakens
 	// durability, so it is not reported as a failed write.
-	if d, derr := os.Open(dir); derr == nil {
+	if d, derr := os.Open(dir); derr == nil { //nolint:gosec // G304: dir is the parent of the operator-chosen config file
 		_ = d.Sync()
 		_ = d.Close()
 	}

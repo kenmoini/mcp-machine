@@ -167,7 +167,8 @@ func shellQuote(w string) string {
 	}
 	plain := true
 	for _, r := range w {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-.,/:=@%+", r)) {
+		isPlain := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-.,/:=@%+", r)
+		if !isPlain {
 			plain = false
 			break
 		}
