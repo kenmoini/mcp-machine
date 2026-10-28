@@ -28,7 +28,7 @@ clients (Claude Code, Cursor, mcp-machine connect, mcp-remote)
 | Package | Role |
 |---|---|
 | `cmd/mcp-machine`, `internal/cli` | Entry point and the subcommands `serve`, `connect`, `validate`, `import`, `version`. |
-| `internal/config` | YAML model, defaults, `${VAR}` expansion, validation, spec hashing, the file watcher, and the comment-preserving writer. |
+| `internal/config` | YAML model, defaults, `${VAR}` expansion, validation, spec hashing, the layered loader and merge, the file watcher, and the drop-in writer. |
 | `internal/manager` | One runner per server. Reconciles the desired config against running containers, drives each server through its lifecycle, retries with backoff. |
 | `internal/store` | The in-memory status registry the manager writes and the UI reads, plus the container label helpers. |
 | `internal/sources` | Turns a config entry into something runnable: `remote` (an endpoint), `command` (a container spec), `build` (a git clone plus an image build plan). |
@@ -115,15 +115,29 @@ stdout/stderr logs are what the UI shows on the server page.
 
 ## Configuration flow
 
-The YAML file lives on a volume mounted at `/data`. The watcher watches the
-file's directory (not the file), so editor renames and the UI's atomic
-write-back both trigger a reload. A reload that fails to parse or validate
-keeps the last good configuration and records the error, which the Config page
-shows. Each successful reload is handed to the manager, which reconciles by
-name and spec hash. The UI edits the same file through a `yaml.v3` node tree so
-comments and order survive, serializes its writes, and reloads right after
-writing so the change is applied before the browser is redirected; see
-[config.md](config.md).
+Configuration comes in three layers: the administrator's base file
+`/etc/mcp-machine/config.yaml` and system drop-ins in
+`/etc/mcp-machine/config.d/`, mounted read-only, and the user drop-ins in
+`/data/config.d/` that the UI writes. `config.ResolveLayout` turns the `-c`,
+`--system-config-d`, and `--config-d` flags into a `Layout` (falling back to
+the deprecated `/data/config.yaml` when the admin root holds neither
+`config.yaml` nor a drop-in);
+`Layout.Load` reads every file in order and returns a `Set`: the merged,
+defaulted, and expanded `Config`, the files loaded, and each server's `Origin`
+(the files that define it, by layer), which the UI and `validate -v` show.
+Admin definitions of a name deep-merge; a user definition replaces them. The
+UI writes only through `config.DirWriter`, which validates the merged set with
+the change in place and then writes or removes one `<name>.yaml` in the user
+directory, atomically and serialized process-wide; it has no way to write the
+administrator's files.
+
+The watcher watches the base file's directory and both drop-in directories
+(not the files), so editor renames and the UI's atomic writes trigger a reload.
+A reload in which any file fails to read, parse, or validate keeps the last
+good configuration and records the error, naming the file, which the Config
+page shows. Each successful reload is handed to the manager, which reconciles
+by name and spec hash. The UI reloads right after writing so the change is
+applied before the browser is redirected; see [config.md](config.md).
 
 ## Origin and TLS
 

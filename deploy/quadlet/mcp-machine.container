@@ -10,9 +10,13 @@
 # keep running after logout.
 #
 # Two host directories are mounted:
-#   /etc/mcp-machine  (read-only) holds the admin files: config.yaml and
-#                     optional drop-ins in config.d/*.yaml. It must exist and
-#                     contain config.yaml (start from config.example.yaml).
+#   /etc/mcp-machine  (read-only) holds the admin files: config.yaml (start
+#                     from config.example.yaml) and optional drop-ins in
+#                     config.d/*.yaml. It must exist, since a missing host path
+#                     fails the unit, but may be empty: MCP Machine then falls
+#                     back to /srv/mcp-machine/config.yaml (seen as
+#                     /data/config.yaml, deprecated) with a warning, or starts
+#                     with defaults and a "no configuration found" warning.
 #   /srv/mcp-machine  -> /data (writable) holds UI-owned state; the web UI writes
 #                     the servers it adds or edits to /srv/mcp-machine/config.d/
 #                     <name>.yaml, one file per server. It must exist.

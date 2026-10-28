@@ -45,6 +45,9 @@ COPY --from=build /tmp/mcp-machine /usr/local/bin/mcp-machine
 
 # The admin configuration root: config.yaml plus config.d/*.yaml. Bind-mount a
 # host directory read-only over /etc/mcp-machine; the app never writes there.
+# The mount is optional: without it the app falls back to the deprecated
+# config.yaml directly in /data, with a deprecation warning, or, if that is
+# absent too, starts with defaults and a "no configuration found" warning.
 RUN mkdir -p /etc/mcp-machine/config.d
 
 # UI-owned state: the config.d/ drop-ins the web UI writes, git clones, build

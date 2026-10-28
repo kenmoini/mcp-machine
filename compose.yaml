@@ -6,7 +6,11 @@
 #             ./config/config.d/*.yaml (see config.example.d/).
 #   ./data    -> /data. Writable state; the web UI writes the servers it adds or
 #             edits to ./data/config.d/<name>.yaml, one file per server.
-# Both directories must exist before `up`.
+# Create both directories before `up`. The ./config mount is optional and
+# ./config may stay empty: without a config there, MCP Machine falls back to
+# ./data/config.yaml (the deprecated location) with a deprecation warning, or,
+# if that is absent too, starts with defaults and a "no configuration found"
+# warning.
 # The Podman API socket must be active on the host:
 #   sudo systemctl enable --now podman.socket
 services:

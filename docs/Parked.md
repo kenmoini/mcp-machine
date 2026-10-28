@@ -19,11 +19,6 @@ Known gaps and improvements deferred past v1. Each entry names where the behavio
 - Symptom: the variable must be set or the config fails to load, yet the image reference or `-v` path still reaches Podman as literal `${VAR}` text.
 - Fix: either expand those positions in the resolver as well or exclude them from the load-time check and document that only env values and args are expanded.
 
-### Saving an edit drops an explicitly written default key
-- Where: `internal/web/forms.go` (`stripDefaults`) and `internal/config/writer.go` (`mergeMapping`).
-- Symptom: a hand-written `transport: auto` or `containerfile: Containerfile` is removed, with its comment, on the first UI save. The spec hash is unchanged, so no container is recreated.
-- Fix: only strip keys that were absent in the raw file, by diffing against the raw node tree instead of the defaulted spec.
-
 ## Lifecycle and manager
 
 ### Remove action semantics
@@ -83,10 +78,10 @@ Known gaps and improvements deferred past v1. Each entry names where the behavio
 - Symptom: build progress goes to the daemon's stdout only.
 - Fix: capture build output into a per-server buffer exposed by the logs partial while in the Building state.
 
-### First run with a missing or empty config exits
-- Where: `internal/cli/serve.go`, `internal/config/load.go`.
-- Symptom: `serve` exits 1 when `/data/config.yaml` is missing or empty, although the UI could add servers.
-- Fix: write a `servers: []` skeleton when the file is absent, or start with an empty config and show the UI.
+### First run with an empty config file exits
+- Where: `internal/config/set.go` (`readConfigFile`), `internal/cli/serve.go`.
+- Symptom: a missing configuration now starts `serve` with defaults and a "no configuration found" warning, but a configuration file that exists and is empty (or only whitespace) is still an error, so `serve` exits 1, although the UI could add servers.
+- Fix: treat an empty file as `{}`, or keep the error but start with defaults and show it on the Config page.
 
 ### Error-level log noise from the bindings on every stop
 - Where: Podman bindings' stdin copy goroutine on `rwc.Close()`.
@@ -115,3 +110,4 @@ Known gaps and improvements deferred past v1. Each entry names where the behavio
 - Static assets have no ETag or version in the URL; after an upgrade they can be cached for up to 24 hours.
 - `serve -h` exits 2; only the top-level `help`/`-h` exit 0.
 - The config example and docs could mention that `enabled` omitted in a scripted POST re-enables a server.
+- Blanking a scalar from a later admin layer is not possible in v1: an empty or zero value in a system drop-in keeps what the base file set. It would need a tombstone or an explicit-null syntax.

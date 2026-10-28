@@ -1,7 +1,8 @@
 # Example admin drop-in: save as /etc/mcp-machine/config.d/filesystem.yaml.
-# A drop-in holds only `servers:`; its servers are added to (or override, by
-# name) those in /etc/mcp-machine/config.yaml. The web UI writes its own
-# drop-ins to /data/config.d/, which load after these.
+# A drop-in holds only `servers:`. A server with a new name is added; one with
+# the same name as a server in /etc/mcp-machine/config.yaml merges into, field
+# by field, the base definition. The web UI writes its own drop-ins to
+# /data/config.d/, which load after these and replace a same-named server whole.
 servers:
   - name: filesystem
     type: command
