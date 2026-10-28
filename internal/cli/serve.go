@@ -99,10 +99,10 @@ func newManager(ctx context.Context, path string, cfg *config.Config, engine run
 	state := &configState{current: cfg, path: path}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	watcher, err := config.NewWatcher(path,
-		func(next *config.Config) {
-			state.loaded(next)
-			if applied, _ := applyOnce(runCtx, mgr, state, next, logger); applied {
+	watcher, err := config.NewWatcher(config.Layout{BaseFile: path},
+		func(next *config.Set) {
+			state.loaded(next.Config)
+			if applied, _ := applyOnce(runCtx, mgr, state, next.Config, logger); applied {
 				logger.Info("configuration reloaded")
 			}
 		},

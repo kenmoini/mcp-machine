@@ -394,7 +394,7 @@ func TestWriterTriggersSingleWatcherCallback(t *testing.T) {
 	if err := (config.Writer{Path: h.path}).AddServer(spec); err != nil {
 		t.Fatal(err)
 	}
-	c := h.expectChange(t)
+	c := h.expectChange(t).Config
 	if len(c.Servers) != 1 || c.Servers[0].Name != "delta" {
 		t.Errorf("servers = %+v", c.Servers)
 	}
