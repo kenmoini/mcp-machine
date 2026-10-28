@@ -474,3 +474,28 @@ func TestImportConfirmWriterErrorKeepsFailedEntries(t *testing.T) {
 	}
 	mustContain(t, rec.Body.String(), "disk full", "fs", "web")
 }
+
+func TestEditPreservesMultilineRun(t *testing.T) {
+	const run = "docker run -i --rm \\\n  -e A=1 \\\n  ghcr.io/acme/server:1"
+	e := newEnv(t)
+	cur := config.ServerSpec{Name: "x", Type: "command", Command: &config.CommandSpec{Run: run}}
+	e.cfg.raw = &config.Config{Podman: e.cfg.cfg.Podman, Servers: []config.ServerSpec{cur}}
+
+	rec := e.do("GET", "/servers/x/edit")
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	mustContain(t, body, `<textarea id="f-command-run" name="command.run"`, ">"+run+"</textarea>")
+
+	// A browser submits textarea newlines as CRLF; the stored value stays LF.
+	form := web.FormFromSpec(cur)
+	form.Set("command.run", strings.ReplaceAll(run, "\n", "\r\n"))
+	rec = e.post("/servers/x/edit", form)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if len(e.wr.Updated) != 1 || e.wr.Updated[0].Spec.Command.Run != run {
+		t.Errorf("Updated = %+v", e.wr.Updated)
+	}
+}

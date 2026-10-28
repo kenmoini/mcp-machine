@@ -109,7 +109,7 @@ func specFromForm(v url.Values) (config.ServerSpec, error) {
 	if s.Type == "command" || anySet("command.command", "command.args", "command.env", "command.run") {
 		s.Command = &config.CommandSpec{
 			Command: get("command.command"), Args: lines(v.Get("command.args")),
-			Env: kv("command.env", "=", envShape), Run: get("command.run"),
+			Env: kv("command.env", "=", envShape), Run: strings.ReplaceAll(get("command.run"), "\r\n", "\n"),
 		}
 	}
 	if s.Type == "build" || anySet("build.repo", "build.ref", "build.subdir", "build.containerfile", "build.args",

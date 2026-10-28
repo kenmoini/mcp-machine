@@ -20,7 +20,8 @@
   </div>
   <div class="field">
     <label for="f-command-run">Or: docker run line</label>
-    <input id="f-command-run" name="command.run" class="mono" value="{{.V "command.run"}}" placeholder="docker run -i --rm ghcr.io/acme/server">
+    <textarea id="f-command-run" name="command.run" rows="4" class="mono" spellcheck="false" placeholder="docker run -i --rm ghcr.io/acme/server">{{.V "command.run"}}</textarea>
+    <small class="muted">May span several lines (end each with a backslash).</small>
   </div>
 </fieldset>
 {{template "_form_serve.html" .}}
