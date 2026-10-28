@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/kenmoini/mcp-machine/internal/proxy"
@@ -512,5 +516,194 @@ func TestFacadeSkipsUnregisterableDefinitions(t *testing.T) {
 	if len(snap.Tools) != 2 || len(snap.ResourceTemplates) != 1 || len(snap.Resources) != 1 {
 		t.Errorf("snapshot must hold only mirrored entries: %d tools, %d templates, %d resources",
 			len(snap.Tools), len(snap.ResourceTemplates), len(snap.Resources))
+	}
+}
+
+// waitFor polls cond until it holds or two seconds pass.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func toolNames(t *testing.T, c *mcp.ClientSession) []string {
+	t.Helper()
+	res, err := c.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tl := range res.Tools {
+		names = append(names, tl.Name)
+	}
+	return sorted(names)
+}
+
+func TestFacadeResyncOnToolListChanged(t *testing.T) {
+	backend := newBackend(t, nil)
+	f := proxy.New("test", "1")
+	if err := f.Bind(context.Background(), connectBackend(t, backend, f.ClientOptions())); err != nil {
+		t.Fatal(err)
+	}
+	c := connectBackend(t, f.Server(), nil)
+
+	backend.AddTool(&mcp.Tool{Name: "later", InputSchema: objectSchema},
+		func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{}, nil
+		})
+	waitFor(t, "later to appear", func() bool { return strings.Contains(fmt.Sprint(toolNames(t, c)), "later") })
+
+	backend.RemoveTools("echo")
+	waitFor(t, "echo to vanish", func() bool { return !strings.Contains(fmt.Sprint(toolNames(t, c)), "echo") })
+	if got := fmt.Sprint(toolNames(t, c)); got != "[add later]" {
+		t.Errorf("tools = %s", got)
+	}
+}
+
+func TestFacadeRebindAfterSessionLoss(t *testing.T) {
+	ctx := context.Background()
+	f := proxy.New("test", "1")
+	first := connectBackend(t, newBackend(t, nil), nil)
+	if err := f.Bind(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	c := connectBackend(t, f.Server(), nil)
+	call := func() error {
+		_, err := c.CallTool(ctx, &mcp.CallToolParams{Name: "echo", Arguments: map[string]any{"s": "x"}})
+		return err
+	}
+	if err := call(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := first.Close(); err != nil {
+		t.Logf("close: %v", err)
+	}
+	err := call()
+	if err == nil || !strings.Contains(err.Error(), "backend unavailable") {
+		t.Fatalf("call after session loss: err = %v, want backend unavailable", err)
+	}
+	// The mirrored lists stay while the session is gone.
+	if n := len(f.Snapshot().Tools); n != 2 {
+		t.Errorf("tools after loss = %d, want 2", n)
+	}
+
+	if err := f.Bind(ctx, connectBackend(t, newBackend(t, nil), nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := call(); err != nil {
+		t.Fatalf("call after rebind: %v", err)
+	}
+	// The first session's watcher must not have unbound the new session; give
+	// it time to have run (it fired when first closed).
+	time.Sleep(50 * time.Millisecond)
+	if err := call(); err != nil {
+		t.Fatalf("call after stale watcher ran: %v", err)
+	}
+}
+
+func TestFacadeToleratesMissingCapabilities(t *testing.T) {
+	backend := mcp.NewServer(&mcp.Implementation{Name: "empty", Version: "1"}, nil)
+	f := proxy.New("test", "1")
+	if err := f.Bind(context.Background(), connectBackend(t, backend, nil)); err != nil {
+		t.Fatalf("Bind to capability-less backend: %v", err)
+	}
+	snap := f.Snapshot()
+	if len(snap.Tools)+len(snap.Resources)+len(snap.ResourceTemplates)+len(snap.Prompts) != 0 {
+		t.Errorf("snapshot not empty: %+v", snap)
+	}
+}
+
+func TestFacadeWrapsBackendErrors(t *testing.T) {
+	backend := rawBackend(t)
+	backend.AddTool(&mcp.Tool{Name: "explode", InputSchema: objectSchema},
+		func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return nil, errors.New("boom")
+		})
+	f, c := boundFacade(t, backend)
+	_, err := c.CallTool(context.Background(), &mcp.CallToolParams{Name: "explode"})
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v, want it to contain boom", err)
+	}
+	if f.Calls() != 0 {
+		t.Errorf("failed forward must not count, calls = %d", f.Calls())
+	}
+}
+
+func TestFacadeUnboundListsAreEmptyNoPanic(t *testing.T) {
+	f := proxy.New("test", "1")
+	c := connectBackend(t, f.Server(), nil)
+	ctx := context.Background()
+	tools, err := c.ListTools(ctx, nil)
+	if err != nil || len(tools.Tools) != 0 {
+		t.Errorf("tools = %+v, err = %v", tools, err)
+	}
+	res, err := c.ListResources(ctx, nil)
+	if err != nil || len(res.Resources) != 0 {
+		t.Errorf("resources = %+v, err = %v", res, err)
+	}
+	tpls, err := c.ListResourceTemplates(ctx, nil)
+	if err != nil || len(tpls.ResourceTemplates) != 0 {
+		t.Errorf("templates = %+v, err = %v", tpls, err)
+	}
+	prompts, err := c.ListPrompts(ctx, nil)
+	if err != nil || len(prompts.Prompts) != 0 {
+		t.Errorf("prompts = %+v, err = %v", prompts, err)
+	}
+	if _, err := c.CallTool(ctx, &mcp.CallToolParams{Name: "x"}); err == nil {
+		t.Error("calling a tool on an unbound facade must fail")
+	}
+	if err := f.Resync(ctx); !errors.Is(err, proxy.ErrBackendUnavailable) {
+		t.Errorf("Resync on unbound facade = %v, want ErrBackendUnavailable", err)
+	}
+}
+
+// failLists makes every list method of the backend fail with the given code,
+// like a server that does not implement the feature.
+func failLists(backend *mcp.Server, code int64) {
+	backend.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if strings.HasSuffix(method, "/list") || method == "resources/templates/list" {
+				return nil, &jsonrpc.Error{Code: code, Message: "nope"}
+			}
+			return next(ctx, method, req)
+		}
+	})
+}
+
+func TestFacadeTreatsMethodNotFoundAsEmptyList(t *testing.T) {
+	backend := newBackend(t, nil)
+	failLists(backend, jsonrpc.CodeMethodNotFound)
+	f := proxy.New("test", "1")
+	if err := f.Bind(context.Background(), connectBackend(t, backend, nil)); err != nil {
+		t.Fatalf("method-not-found must read as an empty list: %v", err)
+	}
+	if n := len(f.Snapshot().Tools); n != 0 {
+		t.Errorf("tools = %d, want 0", n)
+	}
+}
+
+func TestFacadeSkipsListsOfUnadvertisedCapabilities(t *testing.T) {
+	// A feature-less backend advertises no capabilities, so the facade must not
+	// even ask: a list error that is not method-not-found would otherwise fail Bind.
+	backend := mcp.NewServer(&mcp.Implementation{Name: "empty", Version: "1"}, nil)
+	failLists(backend, jsonrpc.CodeInternalError)
+	f := proxy.New("test", "1")
+	if err := f.Bind(context.Background(), connectBackend(t, backend, nil)); err != nil {
+		t.Fatalf("lists of unadvertised capabilities must not be requested: %v", err)
+	}
+}
+
+func TestFacadeBindFailsOnRealListErrors(t *testing.T) {
+	backend := newBackend(t, nil)
+	failLists(backend, jsonrpc.CodeInternalError)
+	f := proxy.New("test", "1")
+	if err := f.Bind(context.Background(), connectBackend(t, backend, nil)); err == nil {
+		t.Fatal("an internal error from an advertised list must fail Bind")
 	}
 }

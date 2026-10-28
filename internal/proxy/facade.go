@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -63,11 +64,34 @@ func New(name, version string) *Facade {
 func (f *Facade) Server() *mcp.Server { return f.server }
 
 // Bind sets the backend session and resyncs the mirrored lists from it.
+//
+// Bind also starts a goroutine that waits for the session to end and then
+// unbinds it, provided it is still the bound session (a later Bind with a new
+// session is left alone). The goroutine exits when the session does. The
+// manager owns the backend container, so it observes session loss by other
+// means as well and calls Bind again with a fresh session.
 func (f *Facade) Bind(ctx context.Context, sess *mcp.ClientSession) error {
+	if sess == nil {
+		f.Unbind()
+		return ErrBackendUnavailable
+	}
 	f.mu.Lock()
 	f.sess = sess
 	f.mu.Unlock()
+	go func() {
+		_ = sess.Wait()
+		f.unbindIf(sess)
+	}()
 	return f.Resync(ctx)
+}
+
+// unbindIf clears the session only if it is still sess.
+func (f *Facade) unbindIf(sess *mcp.ClientSession) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sess == sess {
+		f.sess = nil
+	}
 }
 
 // Unbind clears the backend session. Mirrored lists stay until the next Bind.
@@ -113,6 +137,16 @@ func (f *Facade) ClientOptions() *mcp.ClientOptions {
 	}
 }
 
+// backendErr reports a failed backend call. A session that went away mid-call
+// is reported as ErrBackendUnavailable; other errors, including the backend's
+// own error messages, pass through unchanged.
+func backendErr(err error) error {
+	if errors.Is(err, mcp.ErrConnectionClosed) {
+		return fmt.Errorf("%w: %v", ErrBackendUnavailable, err)
+	}
+	return err
+}
+
 func (f *Facade) session() (*mcp.ClientSession, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -134,7 +168,18 @@ func (f *Facade) Resync(ctx context.Context) error {
 		return err
 	}
 
-	tools, err := listAll(func(cursor string) ([]*mcp.Tool, string, error) {
+	// Lists of capabilities the backend does not advertise are not requested.
+	// Backends without an InitializeResult (newer protocol versions) are asked,
+	// and a method-not-found answer reads as an empty list.
+	hasTools, hasResources, hasPrompts := true, true, true
+	if init := sess.InitializeResult(); init != nil {
+		c := init.Capabilities
+		hasTools = c != nil && c.Tools != nil
+		hasResources = c != nil && c.Resources != nil
+		hasPrompts = c != nil && c.Prompts != nil
+	}
+
+	tools, err := listAll(hasTools, func(cursor string) ([]*mcp.Tool, string, error) {
 		r, err := sess.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
 		if err != nil {
 			return nil, "", err
@@ -144,7 +189,7 @@ func (f *Facade) Resync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	resources, err := listAll(func(cursor string) ([]*mcp.Resource, string, error) {
+	resources, err := listAll(hasResources, func(cursor string) ([]*mcp.Resource, string, error) {
 		r, err := sess.ListResources(ctx, &mcp.ListResourcesParams{Cursor: cursor})
 		if err != nil {
 			return nil, "", err
@@ -154,7 +199,7 @@ func (f *Facade) Resync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	templates, err := listAll(func(cursor string) ([]*mcp.ResourceTemplate, string, error) {
+	templates, err := listAll(hasResources, func(cursor string) ([]*mcp.ResourceTemplate, string, error) {
 		r, err := sess.ListResourceTemplates(ctx, &mcp.ListResourceTemplatesParams{Cursor: cursor})
 		if err != nil {
 			return nil, "", err
@@ -164,7 +209,7 @@ func (f *Facade) Resync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	prompts, err := listAll(func(cursor string) ([]*mcp.Prompt, string, error) {
+	prompts, err := listAll(hasPrompts, func(cursor string) ([]*mcp.Prompt, string, error) {
 		r, err := sess.ListPrompts(ctx, &mcp.ListPromptsParams{Cursor: cursor})
 		if err != nil {
 			return nil, "", err
@@ -271,13 +316,22 @@ func safely(fn func()) (err error) {
 	return nil
 }
 
-// listAll follows NextCursor until the backend reports no more pages.
-func listAll[T any](page func(cursor string) ([]T, string, error)) ([]T, error) {
+// listAll follows NextCursor until the backend reports no more pages. It
+// returns an empty list without asking when the capability is not advertised,
+// and treats a JSON-RPC method-not-found error as an empty list.
+func listAll[T any](advertised bool, page func(cursor string) ([]T, string, error)) ([]T, error) {
+	if !advertised {
+		return nil, nil
+	}
 	var all []T
 	cursor := ""
 	for {
 		items, next, err := page(cursor)
 		if err != nil {
+			var rpcErr *jsonrpc.Error
+			if errors.As(err, &rpcErr) && rpcErr.Code == jsonrpc.CodeMethodNotFound {
+				return nil, nil
+			}
 			return nil, err
 		}
 		all = append(all, items...)
@@ -338,7 +392,7 @@ func (f *Facade) forwardTool(ctx context.Context, req *mcp.CallToolRequest) (*mc
 	}
 	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: req.Params.Name, Arguments: args})
 	if err != nil {
-		return nil, err
+		return nil, backendErr(err)
 	}
 	f.calls.Add(1)
 	return res, nil
@@ -351,7 +405,7 @@ func (f *Facade) forwardResource(ctx context.Context, req *mcp.ReadResourceReque
 	}
 	res, err := sess.ReadResource(ctx, &mcp.ReadResourceParams{URI: req.Params.URI})
 	if err != nil {
-		return nil, err
+		return nil, backendErr(err)
 	}
 	f.calls.Add(1)
 	return res, nil
@@ -364,7 +418,7 @@ func (f *Facade) forwardPrompt(ctx context.Context, req *mcp.GetPromptRequest) (
 	}
 	res, err := sess.GetPrompt(ctx, &mcp.GetPromptParams{Name: req.Params.Name, Arguments: req.Params.Arguments})
 	if err != nil {
-		return nil, err
+		return nil, backendErr(err)
 	}
 	f.calls.Add(1)
 	return res, nil
