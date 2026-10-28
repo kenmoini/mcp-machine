@@ -1,0 +1,39 @@
+{{define "content"}}
+{{with .Server}}
+<div class="head">
+  <h1>{{.Name}} <span class="badge {{.State}}">{{.State}}</span></h1>
+  <div class="actions">
+    {{- $t := "#flash"}}
+    <button hx-post="/servers/{{.Name}}/actions/start" hx-target="{{$t}}" hx-swap="innerHTML">Start</button>
+    <button hx-post="/servers/{{.Name}}/actions/stop" hx-target="{{$t}}" hx-swap="innerHTML">Stop</button>
+    <button hx-post="/servers/{{.Name}}/actions/restart" hx-target="{{$t}}" hx-swap="innerHTML">Restart</button>
+    <button hx-post="/servers/{{.Name}}/actions/resync" hx-target="{{$t}}" hx-swap="innerHTML">Resync</button>
+    {{- if .CanRebuild}}
+    <button hx-post="/servers/{{.Name}}/actions/rebuild" hx-target="{{$t}}" hx-swap="innerHTML">Rebuild</button>
+    {{- end}}
+    <button class="danger" hx-post="/servers/{{.Name}}/actions/remove" hx-target="{{$t}}" hx-swap="innerHTML" hx-confirm="Remove {{.Name}}?">Remove</button>
+  </div>
+</div>
+{{end}}
+
+<h2>Status</h2>
+{{template "_status.html" .Server}}
+{{with .Spec}}
+<h2>Configuration</h2>
+<div class="card"><dl>
+  <dt>Type</dt><dd>{{.Type}}</dd>
+  <dt>Enabled</dt><dd>{{if .Enabled}}yes{{else}}no{{end}}</dd>
+  {{if .Source}}<dt>Source</dt><dd class="mono">{{.Source}}</dd>{{end}}
+  {{if .Serve}}<dt>Serve</dt><dd class="mono">{{.Serve}}</dd>{{end}}
+</dl></div>
+{{end}}
+
+<h2>Connect</h2>
+{{template "_connect.html" .Connect}}
+
+<h2>Capabilities</h2>
+{{template "_tools.html" .Tools}}
+
+<h2>Logs</h2>
+{{template "_logs.html" .Logs}}
+{{end}}

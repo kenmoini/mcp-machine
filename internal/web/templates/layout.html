@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"[45]..","swap":true,"error":true}]}'>
+<title>{{.Title}} - MCP Machine</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body hx-boost="true">
+<nav class="nav">
+  <a class="brand" href="/">MCP Machine</a>
+  <a href="/"{{if eq .Active "dashboard"}} aria-current="page"{{end}}>Dashboard</a>
+  <a href="/config"{{if eq .Active "config"}} aria-current="page"{{end}}>Config</a>
+</nav>
+<div id="flash" class="flash" role="status" aria-live="polite">{{.Flash}}</div>
+<main>
+{{template "content" .Data}}
+</main>
+<footer class="footer">mcp-machine {{.Version}}</footer>
+</body>
+</html>

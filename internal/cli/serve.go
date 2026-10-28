@@ -23,6 +23,7 @@ import (
 	"github.com/kenmoini/mcp-machine/internal/sources/build"
 	"github.com/kenmoini/mcp-machine/internal/sources/resolver"
 	"github.com/kenmoini/mcp-machine/internal/store"
+	"github.com/kenmoini/mcp-machine/internal/web"
 )
 
 const (
@@ -262,6 +263,16 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts
 		return fail(err)
 	}
 	ops.Mount(mux, deps.ready, deps.metrics)
+	// The UI owns everything else. It is mounted last: the adapters' more
+	// specific /servers/{name}/mcp and /sse patterns win over its "/".
+	mux.Handle("/", web.New(web.Deps{
+		Manager:   deps.mgr,
+		Registry:  deps.reg,
+		Config:    deps.state,
+		PublicURL: cfg.PublicURL,
+		Version:   buildinfo.Version,
+		Logger:    logger,
+	}))
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: readHeaderTimeout}
 	useTLS := cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != ""

@@ -1,0 +1,12 @@
+<div id="status" class="card" hx-get="/servers/{{.Name}}/status" hx-trigger="every 2s" hx-swap="outerHTML">
+  <dl>
+    <dt>State</dt><dd><span class="badge {{.State}}">{{.State}}</span>{{if .Paused}} <span class="tag">paused</span>{{end}}</dd>
+    <dt>Type</dt><dd>{{.Type}}</dd>
+    <dt>Image</dt><dd class="mono">{{if .Image}}{{.Image}}{{else}}-{{end}}</dd>
+    <dt>Container</dt><dd class="mono">{{if .ContainerID}}{{.ContainerID}}{{else}}-{{end}}</dd>
+    <dt>Spec hash</dt><dd class="mono">{{if .Hash}}{{.Hash}}{{else}}-{{end}}</dd>
+    <dt>Since</dt><dd>{{since .Since}}</dd>
+    <dt>Restarts</dt><dd>{{.Restarts}}</dd>
+  </dl>
+  {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+</div>

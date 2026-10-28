@@ -1,0 +1,35 @@
+{{define "content"}}
+<div class="head">
+  <h1>Configuration</h1>
+  <form method="post" action="/config/reload"><button type="submit">Reload now</button></form>
+</div>
+{{if .LastError}}<div class="err banner">Last reload failed: {{.LastError}}</div>{{end}}
+{{with .Config}}
+<div class="card"><dl>
+  <dt>Listen</dt><dd class="mono">{{.Listen}}</dd>
+  <dt>Public URL</dt><dd class="mono">{{if .PublicURL}}{{.PublicURL}}{{else}}-{{end}}</dd>
+  <dt>TLS</dt><dd>{{if and .TLS.CertFile .TLS.KeyFile}}enabled{{else}}disabled{{end}}</dd>
+  <dt>Podman socket</dt><dd class="mono">{{.Podman.Socket}}</dd>
+  <dt>Podman network</dt><dd class="mono">{{if .Podman.Network}}{{.Podman.Network}}{{else}}-{{end}}</dd>
+  <dt>Workspace dir</dt><dd class="mono">{{.WorkspaceDir}}</dd>
+  <dt>Data dir</dt><dd class="mono">{{.DataDir}}</dd>
+</dl></div>
+
+<h2>Registries</h2>
+{{if .Registries}}<table><thead><tr><th>Registry</th><th>Username</th></tr></thead><tbody>
+{{range .Registries}}<tr><td class="mono">{{.Registry}}</td><td>{{.Username}}</td></tr>
+{{end}}</tbody></table>{{else}}<p class="empty">None configured.</p>{{end}}
+
+<h2>Runtimes</h2>
+{{if .Runtimes}}<table><thead><tr><th>Command</th><th>Image</th></tr></thead><tbody>
+{{range $cmd, $img := .Runtimes}}<tr><td class="mono">{{$cmd}}</td><td class="mono">{{$img}}</td></tr>
+{{end}}</tbody></table>{{else}}<p class="empty">None configured.</p>{{end}}
+{{else}}
+<p class="empty">No configuration loaded.</p>
+{{end}}
+
+<h2>Servers</h2>
+{{if .Servers}}<table><thead><tr><th>Name</th><th>Type</th><th>Enabled</th></tr></thead><tbody>
+{{range .Servers}}<tr><td><a href="/servers/{{.Name}}">{{.Name}}</a></td><td>{{.Type}}</td><td>{{if .Enabled}}yes{{else}}no{{end}}</td></tr>
+{{end}}</tbody></table>{{else}}<p class="empty">No servers configured.</p>{{end}}
+{{end}}

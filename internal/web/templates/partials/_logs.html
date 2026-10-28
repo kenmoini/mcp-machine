@@ -1,0 +1,4 @@
+<pre id="logs" class="logs" hx-get="/servers/{{.Name}}/logs?tail={{.Tail}}" hx-trigger="every 3s" hx-swap="outerHTML">{{if .Error}}<span class="err">{{.Error}}</span>
+{{end}}{{range .Lines}}<span class="line{{if .Stderr}} stderr{{end}}">{{.Text}}</span>
+{{else}}{{if not .Error}}<span class="empty">(no output)</span>
+{{end}}{{end}}</pre>
