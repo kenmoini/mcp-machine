@@ -111,8 +111,9 @@ an IP address, `localhost`, MCP Machine's own host name, the host of
 DNS-rebinding page sends requests whose `Origin` matches their `Host`, so the
 origin check alone would let them through.
 
-A request counts as a browser's when it has an `Origin` header or any
-`Sec-Fetch-Site`/`Sec-Fetch-Mode`/`Sec-Fetch-Dest` header. So browser requests
+A request counts as a browser's when it has an `Origin` header or a
+`Sec-Fetch-Site` header (Node-based clients such as `mcp-remote` send only
+`Sec-Fetch-Mode` and are treated as non-browser clients). So browser requests
 to a DNS name (`http://mcp.lan:8080/...`, a reverse proxy's name) must match
 `public_url` or `allowed_origins`; non-browser clients (CLIs, SDKs, `connect`,
 another container calling `http://mcp-machine:8080/...`) are unaffected.

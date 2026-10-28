@@ -133,7 +133,7 @@ same-origin requests and requests with no `Origin` header (CLI clients) pass;
 cross-origin requests pass only if the origin is in `allowed_origins` or equals
 the `public_url` origin. The Go SDK's loopback DNS-rebinding protection stays
 on. The UI's state-changing requests have their own same-origin check. Browser
-requests (those with an `Origin` or `Sec-Fetch-*` header) to the MCP routes,
+requests (those with an `Origin` or `Sec-Fetch-Site` header) to the MCP routes,
 and browser state-changing UI requests, also pass a host check
 (`httpadapter.HostGuard`): the `Host` header must be an IP address,
 `localhost`, the process's own host name, the `public_url` host, or an

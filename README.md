@@ -125,7 +125,7 @@ claude mcp add --transport http filesystem http://mcp.lan:8080/servers/filesyste
 
 For stdio-only clients use `mcp-machine connect <url>` or `npx mcp-remote <url>`. Details, including origin settings for browser-based clients, are in [docs/clients.md](docs/clients.md).
 
-To block DNS-rebinding attacks from web pages, MCP Machine only answers browser requests (those carrying `Origin` or `Sec-Fetch-*` headers) to the MCP routes, and browser UI changes, when they are addressed to an IP address, `localhost`, its own host name, the host of `public_url`, or a host in `allowed_origins`. **Browser requests to a DNS name such as `mcp.lan` must match `public_url` (`public_url: "http://mcp.lan:8080"`) or `allowed_origins`**, otherwise they get `403 host not allowed`. Non-browser clients (Claude Code, SDKs, `curl`, `mcp-machine connect`, other containers) are unaffected.
+To block DNS-rebinding attacks from web pages, MCP Machine only answers browser requests (those carrying an `Origin` or `Sec-Fetch-Site` header) to the MCP routes, and browser UI changes, when they are addressed to an IP address, `localhost`, its own host name, the host of `public_url`, or a host in `allowed_origins`. **Browser requests to a DNS name such as `mcp.lan` must match `public_url` (`public_url: "http://mcp.lan:8080"`) or `allowed_origins`**, otherwise they get `403 host not allowed`. Non-browser clients (Claude Code, SDKs, `curl`, `mcp-machine connect`, other containers) are unaffected.
 
 ## The web UI
 
@@ -191,4 +191,4 @@ With `podman machine` (macOS), use the socket path printed by `podman machine in
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+MIT License. See [LICENSE](LICENSE).

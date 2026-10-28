@@ -241,9 +241,10 @@ Machine's own host name, the host of `public_url`, and the hosts of
 `allowed_origins`; ports are not compared. Anything else gets 403
 `{"jsonrpc":"2.0","error":{"code":-32000,"message":"host not allowed"}}`.
 
-A request counts as a browser's when it carries an `Origin` header or any
-fetch-metadata header (`Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`),
-which every current browser sends. Non-browser clients (MCP SDKs, `curl`,
+A request counts as a browser's when it carries an `Origin` header or a
+`Sec-Fetch-Site` header, which every current browser sends on every request
+(`Sec-Fetch-Mode`/`Sec-Fetch-Dest` alone do not count, because Node's `fetch`
+sends `Sec-Fetch-Mode: cors` and would otherwise look like a browser). Non-browser clients (MCP SDKs, `curl`,
 `mcp-machine connect`, a sidecar calling `http://mcp-machine:8080/...`) send
 none of them and are unaffected, whatever host name they use.
 

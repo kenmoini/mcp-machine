@@ -49,10 +49,13 @@ func HostGuard(opts Options) func(http.Handler) http.Handler {
 	}
 }
 
-// fromBrowser reports whether r carries the headers browsers attach: Origin
-// or any fetch-metadata header.
+// fromBrowser reports whether r carries the headers only browsers attach:
+// Origin or Sec-Fetch-Site. Sec-Fetch-Mode and Sec-Fetch-Dest are deliberately
+// not used: Node's fetch (undici) sends "Sec-Fetch-Mode: cors" on every
+// request, which would make mcp-remote and other Node-based MCP clients look
+// like browsers. Every current browser sends Sec-Fetch-Site on every request.
 func fromBrowser(r *http.Request) bool {
-	for _, h := range []string{"Origin", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest"} {
+	for _, h := range []string{"Origin", "Sec-Fetch-Site"} {
 		if r.Header.Get(h) != "" {
 			return true
 		}

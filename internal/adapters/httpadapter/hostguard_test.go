@@ -52,11 +52,9 @@ func TestHostGuard(t *testing.T) {
 		"localhost.evil":       http.StatusForbidden,
 		"":                     http.StatusForbidden,
 	} {
-		// Every browser header alone marks the request as a browser's.
+		// Origin or Sec-Fetch-Site alone marks the request as a browser's.
 		for _, hdr := range [][2]string{
 			{"Sec-Fetch-Site", "same-origin"},
-			{"Sec-Fetch-Mode", "cors"},
-			{"Sec-Fetch-Dest", "empty"},
 			{"Origin", "http://" + host},
 		} {
 			rec := httptest.NewRecorder()
@@ -143,5 +141,21 @@ func TestMountGuardsHost(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("non-browser POST: status %d, want 404", rec.Code)
+	}
+}
+
+// Node's fetch (undici) adds "Sec-Fetch-Mode: cors" to every request without
+// Origin or Sec-Fetch-Site; such clients (mcp-remote, TypeScript SDK clients,
+// Node sidecars) must pass whatever Host they use.
+func TestHostGuardIgnoresNodeFetchMetadata(t *testing.T) {
+	h := guarded(httpadapter.Options{})
+	for _, host := range []string{"mcp.lan:8080", "mcp-machine:8080", "evil.example"} {
+		for _, hdr := range [][2]string{{"Sec-Fetch-Mode", "cors"}, {"Sec-Fetch-Dest", "empty"}} {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, browserPost(host, hdr[0], hdr[1]))
+			if rec.Code != http.StatusNoContent {
+				t.Errorf("Host %q with only %s: status %d, want %d", host, hdr[0], rec.Code, http.StatusNoContent)
+			}
+		}
 	}
 }

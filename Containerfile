@@ -36,7 +36,7 @@ FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8
 
 LABEL org.opencontainers.image.source="https://github.com/kenmoini/mcp-machine" \
       org.opencontainers.image.description="Self-hosted proxy and manager for MCP servers running as Podman containers" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="MIT"
 
 COPY --from=build /tmp/mcp-machine /usr/local/bin/mcp-machine
 
