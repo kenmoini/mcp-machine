@@ -1,0 +1,5 @@
+bin/
+.git/
+.gocache/
+.superpowers/
+docs/
