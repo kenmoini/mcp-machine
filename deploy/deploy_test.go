@@ -82,6 +82,18 @@ func TestContainerfileStages(t *testing.T) {
 	if !strings.Contains(froms[len(froms)-1], "ubi9/ubi-minimal:9.8") {
 		t.Errorf("last FROM = %q", froms[len(froms)-1])
 	}
+	// The go-toolset base image sets ENV VERSION, so a bare ARG VERSION would
+	// be overridden; the build args must be namespaced.
+	for _, want := range []string{"ARG MCPM_VERSION", "ARG MCPM_COMMIT", "ARG MCPM_DATE"} {
+		if !strings.Contains(cf, want) {
+			t.Errorf("Containerfile missing %q", want)
+		}
+	}
+	for _, l := range strings.Split(cf, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "ARG VERSION") {
+			t.Errorf("Containerfile has bare %q", l)
+		}
+	}
 	if !strings.Contains(cf, `CMD ["serve","-c","/data/config.yaml"]`) {
 		t.Errorf("Containerfile missing the default CMD")
 	}

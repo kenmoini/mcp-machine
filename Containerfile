@@ -3,9 +3,11 @@
 # --- build stage -------------------------------------------------------------
 FROM registry.access.redhat.com/ubi9/go-toolset:1.26 AS build
 
-ARG VERSION=dev
-ARG COMMIT=none
-ARG DATE=unknown
+# Named MCPM_* because the go-toolset base image sets ENV VERSION (the Go
+# version), which would override a plain ARG VERSION.
+ARG MCPM_VERSION=dev
+ARG MCPM_COMMIT=none
+ARG MCPM_DATE=unknown
 
 # The go-toolset image runs as a non-root user with HOME=/opt/app-root/src, so
 # keep every Go cache and module write under paths that user can write.
@@ -24,9 +26,9 @@ COPY . .
 RUN go build -buildvcs=false \
       -tags remote,containers_image_openpgp,exclude_graphdriver_btrfs,exclude_graphdriver_devicemapper \
       -ldflags "-s -w \
-        -X github.com/kenmoini/mcp-machine/internal/buildinfo.Version=${VERSION} \
-        -X github.com/kenmoini/mcp-machine/internal/buildinfo.Commit=${COMMIT} \
-        -X github.com/kenmoini/mcp-machine/internal/buildinfo.Date=${DATE}" \
+        -X github.com/kenmoini/mcp-machine/internal/buildinfo.Version=${MCPM_VERSION} \
+        -X github.com/kenmoini/mcp-machine/internal/buildinfo.Commit=${MCPM_COMMIT} \
+        -X github.com/kenmoini/mcp-machine/internal/buildinfo.Date=${MCPM_DATE}" \
       -o /tmp/mcp-machine ./cmd/mcp-machine
 
 # --- runtime stage -----------------------------------------------------------
