@@ -67,9 +67,9 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage: mcp-machine <command> [flags]
 
 commands:
-  serve      run the proxy and web UI
+  serve      run the proxy and web UI (-c /etc/mcp-machine, --system-config-d, --config-d /data/config.d)
   connect    bridge stdio to a running mcp-machine
-  validate   validate configuration
+  validate   validate configuration (-c /etc/mcp-machine, --system-config-d, --config-d /data/config.d)
   import     import MCP server definitions
   version    print version information
   help       print this help

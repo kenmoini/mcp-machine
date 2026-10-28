@@ -53,6 +53,14 @@ type ConfigView interface {
 	// unexpanded. The editing forms read and validate against it; Current
 	// holds expanded secrets and must never be written back to the file.
 	Raw() (*config.Config, error)
+	// Files returns the files the configuration in effect was read from,
+	// in load order.
+	Files() []string
+	// Origin reports which files define the named server.
+	Origin(name string) (config.Origin, bool)
+	// Warning returns a notice about where the configuration came from
+	// (the deprecated location, or nowhere at all), or "".
+	Warning() string
 }
 
 // ConfigWriter edits the configuration file (used by the forms).
@@ -65,11 +73,13 @@ type ConfigWriter interface {
 // Deps are the collaborators of the UI. Writer may be nil, in which case the
 // editing forms are unavailable.
 type Deps struct {
-	Manager   ManagerAPI
-	Registry  *store.Registry
-	Config    ConfigView
-	Writer    ConfigWriter
-	PublicURL string
+	Manager  ManagerAPI
+	Registry *store.Registry
+	Config   ConfigView
+	Writer   ConfigWriter
+	// EditNotice, when Writer is nil, says why editing is disabled.
+	EditNotice string
+	PublicURL  string
 	// AllowedOrigins are the configured allowed_origins; with PublicURL they
 	// name the hosts state-changing requests may be addressed to.
 	AllowedOrigins []string

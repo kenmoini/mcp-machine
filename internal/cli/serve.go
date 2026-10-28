@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"path/filepath"
+	"os"
 	"sync"
 	"time"
 
@@ -78,11 +78,16 @@ const (
 )
 
 // newManager builds the server manager and starts what keeps it in step with
-// the configuration: a goroutine applying cfg (retrying until the first Apply
-// succeeds) and one watching the config file at path. ctx is the long-lived
-// serve context; the goroutines and every Apply use it, never a request
-// context. deps.close stops them and the manager.
-func newManager(ctx context.Context, path string, cfg *config.Config, engine runtime.Engine, logger *slog.Logger) (serveDeps, error) {
+// the configuration: a goroutine applying set (retrying until the first Apply
+// succeeds) and one watching every location of the layout l. ctx is the
+// long-lived serve context; the goroutines and every Apply use it, never a
+// request context. deps.close stops them and the manager.
+//
+// While no configuration file is loaded the manager keeps the labeled
+// containers of servers it does not know, so a missing configuration mount
+// does not remove running servers.
+func newManager(ctx context.Context, l config.Layout, set *config.Set, engine runtime.Engine, logger *slog.Logger) (serveDeps, error) {
+	cfg := set.Config
 	inContainer, selfID := detectSelf(ctx, engine, logger)
 	reg := store.NewRegistry()
 	builder := &build.Builder{
@@ -97,12 +102,14 @@ func newManager(ctx context.Context, path string, cfg *config.Config, engine run
 		Logger:      logger,
 		Version:     buildinfo.Version,
 	})
-	state := &configState{current: cfg, path: path}
+	mgr.SetKeepUnknown(len(set.Files) == 0)
+	state := &configState{layout: l, set: set}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	watcher, err := config.NewWatcher(config.Layout{BaseFile: path},
+	watcher, err := config.NewWatcher(l,
 		func(next *config.Set) {
-			state.loaded(next.Config)
+			mgr.SetKeepUnknown(len(next.Files) == 0)
+			state.loaded(next)
 			if applied, _ := applyOnce(runCtx, mgr, state, next.Config, logger); applied {
 				logger.Info("configuration reloaded")
 			}
@@ -230,12 +237,41 @@ func newLogger(w io.Writer, lc config.LogConfig) *slog.Logger {
 	return slog.New(slog.NewTextHandler(w, opts))
 }
 
+// prepareUserDir creates the user drop-in directory of l and checks that it
+// can be written. notice is "" when it can, or when there is no user layer;
+// otherwise it says why editing is disabled. A directory that cannot be
+// created (or is not a directory) is dropped from the returned layout, as
+// there is nothing to read from it; one that exists but cannot be written
+// stays, and is still read.
+func prepareUserDir(l config.Layout) (config.Layout, string) {
+	if l.UserDir == "" {
+		return l, ""
+	}
+	disabled := func(err error) string {
+		return fmt.Sprintf("editing is disabled: %s is not writable (%v)", l.UserDir, err)
+	}
+	if err := os.MkdirAll(l.UserDir, 0o750); err != nil {
+		notice := disabled(err)
+		l.UserDir = ""
+		return l, notice
+	}
+	f, err := os.CreateTemp(l.UserDir, ".probe-*")
+	if err != nil {
+		return l, disabled(err)
+	}
+	_ = f.Close()
+	if err := os.Remove(f.Name()); err != nil {
+		return l, disabled(err)
+	}
+	return l, ""
+}
+
 // runServe implements "serve": it wires the engine, adapters, and ops
 // endpoints into one HTTP server and runs it until ctx is cancelled.
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts Options) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	path := fs.String("c", defaultConfigPath, "path to the configuration file")
+	cf := addConfigFlags(fs)
 	listen := fs.String("listen", "", "listen address, overriding the configuration")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -246,14 +282,29 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts
 		return exitRuntime
 	}
 
-	cfg, err := loadConfig(*path)
+	l, err := cf.layout()
 	if err != nil {
 		return fail(err)
 	}
+	l, editNotice := prepareUserDir(l)
+	set, err := loadSet(l)
+	if err != nil {
+		return fail(err)
+	}
+	cfg := set.Config
 	if *listen != "" {
 		cfg.Listen = *listen
 	}
 	logger := newLogger(stderr, cfg.Log)
+	if w := configWarning(set); w != "" {
+		logger.Warn(w)
+	}
+	var writer web.ConfigWriter
+	if editNotice != "" {
+		logger.Warn(editNotice)
+	} else if l.UserDir != "" {
+		writer = config.DirWriter{Dir: l.UserDir, Layout: l}
+	}
 
 	// TLS and the listener come first: if either fails, nothing has been
 	// started (no engine connection, no containers).
@@ -290,7 +341,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts
 		return fail(err)
 	}
 
-	deps, err := newManager(ctx, *path, cfg, engine, logger)
+	deps, err := newManager(ctx, l, set, engine, logger)
 	if err != nil {
 		return fail(err)
 	}
@@ -311,7 +362,8 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts
 		Manager:        deps.mgr,
 		Registry:       deps.reg,
 		Config:         deps.state,
-		Writer:         config.DirWriter{Dir: filepath.Join(filepath.Dir(*path), "config.d"), Layout: config.Layout{BaseFile: *path}},
+		Writer:         writer,
+		EditNotice:     editNotice,
 		PublicURL:      cfg.PublicURL,
 		AllowedOrigins: cfg.AllowedOrigins,
 		Version:        buildinfo.Version,

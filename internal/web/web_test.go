@@ -86,7 +86,17 @@ type fakeConfig struct {
 	// onReload, if set, runs on Reload (the real one applies the config,
 	// which registers new servers).
 	onReload func()
+	files    []string
+	origins  map[string]config.Origin
+	warning  string
 }
+
+func (c *fakeConfig) Files() []string { return c.files }
+func (c *fakeConfig) Origin(name string) (config.Origin, bool) {
+	o, ok := c.origins[name]
+	return o, ok
+}
+func (c *fakeConfig) Warning() string { return c.warning }
 
 func (c *fakeConfig) Current() *config.Config { return c.cfg }
 func (c *fakeConfig) LastError() error        { return c.lastErr }

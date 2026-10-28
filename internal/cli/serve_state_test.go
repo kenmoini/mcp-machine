@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,15 +30,16 @@ func newTestDeps(t *testing.T, eng *fake.Engine, body string) (serveDeps, string
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.Load(path)
+	l, err := (&configFlags{path: path}).layout()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := config.Validate(cfg); err != nil {
+	set, err := loadSet(l)
+	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	deps, err := newManager(ctx, path, cfg, eng, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	deps, err := newManager(ctx, l, set, eng, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -137,7 +139,7 @@ func TestConfigStateRawKeepsPlaceholders(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s := &configState{path: path}
+	s := &configState{layout: config.Layout{BaseFile: path}}
 	raw, err := s.Raw()
 	if err != nil {
 		t.Fatal(err)
@@ -149,12 +151,136 @@ func TestConfigStateRawKeepsPlaceholders(t *testing.T) {
 		t.Errorf("defaults not applied: %+v", raw.Servers[0].Remote)
 	}
 
-	if err := os.Remove(path); err != nil {
+	// A missing base file is no error for a layout (defaults), but a
+	// broken one is.
+	if err := os.WriteFile(path, []byte("servers: [this is: not valid: yaml\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Raw(); err == nil {
-		t.Error("missing file: want error")
+		t.Error("broken file: want error")
 	}
+}
+
+// writeFiles writes each body to dir/<relative path>, creating directories.
+func writeFiles(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for rel, body := range files {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestConfigStateOriginAndFiles(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"config.yaml":     "servers:\n  - {name: a, type: remote, remote: {url: \"http://a/mcp\"}}\n",
+		"config.d/b.yaml": "servers:\n  - {name: b, type: remote, remote: {url: \"http://b/mcp\"}}\n",
+	})
+	l, err := (&configFlags{path: root}).layout()
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := loadSet(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &configState{layout: l}
+	s.loaded(set)
+
+	if got := s.Files(); !slices.Equal(got, set.Files) || len(got) != 2 {
+		t.Errorf("Files() = %v, want %v", got, set.Files)
+	}
+	if o, ok := s.Origin("a"); !ok || o.String() != "Defined in "+filepath.Join(root, "config.yaml")+" (base)" {
+		t.Errorf("Origin(a) = %q, %v", o.String(), ok)
+	}
+	if _, ok := s.Origin("zz"); ok {
+		t.Error("Origin(zz) found")
+	}
+	if s.Current() != set.Config {
+		t.Error("Current() is not the loaded set's config")
+	}
+	if w := s.Warning(); w != "" {
+		t.Errorf("Warning() = %q, want none", w)
+	}
+}
+
+func TestConfigStateWarning(t *testing.T) {
+	t.Run("deprecated location", func(t *testing.T) {
+		root, data := t.TempDir(), t.TempDir()
+		legacy := filepath.Join(data, "config.yaml")
+		writeFiles(t, data, map[string]string{"config.yaml": "log: {level: debug}\n"})
+		SetLegacyConfigPath(t, legacy)
+		l, err := (&configFlags{path: root}).layout()
+		if err != nil {
+			t.Fatal(err)
+		}
+		set, err := loadSet(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := &configState{layout: l, set: set}
+		want := "configuration read from the deprecated location " + legacy +
+			"; move it to " + filepath.Join(root, "config.yaml")
+		if got := s.Warning(); got != want {
+			t.Errorf("Warning() = %q, want %q", got, want)
+		}
+	})
+	t.Run("nothing found", func(t *testing.T) {
+		root, user := t.TempDir(), t.TempDir()
+		legacy := filepath.Join(t.TempDir(), "config.yaml")
+		SetLegacyConfigPath(t, legacy)
+		l, err := (&configFlags{path: root, userDir: user}).layout()
+		if err != nil {
+			t.Fatal(err)
+		}
+		set, err := loadSet(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := &configState{layout: l, set: set}
+		want := "no configuration found (searched: " + filepath.Join(root, "config.yaml") + ", " +
+			filepath.Join(root, "config.d") + ", " + legacy + ", " + user + "); running with defaults"
+		if got := s.Warning(); got != want {
+			t.Errorf("Warning() = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestPrepareUserDir(t *testing.T) {
+	t.Run("created and writable", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "a", "config.d")
+		l, notice := prepareUserDir(config.Layout{UserDir: dir})
+		if notice != "" || l.UserDir != dir {
+			t.Fatalf("notice=%q UserDir=%q", notice, l.UserDir)
+		}
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			t.Fatalf("user dir not created: %v", err)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Errorf("probe left files behind: %v", entries)
+		}
+	})
+	t.Run("not a directory", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "file")
+		writeFiles(t, filepath.Dir(file), map[string]string{"file": "x"})
+		l, notice := prepareUserDir(config.Layout{UserDir: file})
+		if !strings.HasPrefix(notice, "editing is disabled: "+file+" is not writable (") || !strings.HasSuffix(notice, ")") {
+			t.Errorf("notice = %q", notice)
+		}
+		if l.UserDir != "" {
+			t.Errorf("UserDir = %q, want the user layer dropped", l.UserDir)
+		}
+	})
+	t.Run("no user layer", func(t *testing.T) {
+		if l, notice := prepareUserDir(config.Layout{}); notice != "" || l.UserDir != "" {
+			t.Errorf("notice=%q UserDir=%q", notice, l.UserDir)
+		}
+	})
 }
 
 func TestNewManagerJoinsNetworkWithoutIDLine(t *testing.T) {
