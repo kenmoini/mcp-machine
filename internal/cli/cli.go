@@ -5,8 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/kenmoini/mcp-machine/internal/buildinfo"
+	"github.com/kenmoini/mcp-machine/internal/runtime"
 )
 
 // Exit codes.
@@ -16,13 +20,19 @@ const (
 	exitUsage   = 2
 )
 
-// Options carries injectable dependencies for Run. Fields are added as the
-// subcommands that need them are implemented.
-type Options struct{}
+// Options carries injectable dependencies for Run.
+type Options struct {
+	// NewEngine connects to the container engine at socket. Nil means
+	// podman.New.
+	NewEngine func(ctx context.Context, socket string) (runtime.Engine, error)
+}
 
-// Main runs the CLI with a background context and default options.
+// Main runs the CLI with default options. The context is cancelled on SIGINT
+// or SIGTERM so long-running commands (serve, connect) stop cleanly.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	return Run(context.Background(), args, stdin, stdout, stderr, Options{})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return Run(ctx, args, stdin, stdout, stderr, Options{})
 }
 
 // Run dispatches to a subcommand and returns the process exit code.
@@ -37,7 +47,11 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return exitOK
 	case "connect":
 		return runConnect(ctx, args[1:], stdin, stdout, stderr)
-	case "serve", "validate", "import":
+	case "serve":
+		return runServe(ctx, args[1:], stdout, stderr, opts)
+	case "validate":
+		return runValidate(args[1:], stdout, stderr)
+	case "import":
 		fmt.Fprintf(stderr, "mcp-machine %s: not implemented\n", cmd)
 		return exitRuntime
 	default:

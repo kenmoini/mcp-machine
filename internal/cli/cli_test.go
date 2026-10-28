@@ -45,7 +45,7 @@ func TestNoArgsIsUsageError(t *testing.T) {
 }
 
 func TestStubCommandsNotImplemented(t *testing.T) {
-	for _, cmd := range []string{"serve", "validate", "import"} {
+	for _, cmd := range []string{"import"} {
 		t.Run(cmd, func(t *testing.T) {
 			code, out, errs := run(t, cmd)
 			want := "mcp-machine " + cmd + ": not implemented\n"
