@@ -183,3 +183,16 @@ func TestMakeImageTagsLatest(t *testing.T) {
 		}
 	}
 }
+
+func TestDeployFilesMentionVault(t *testing.T) {
+	// Both deployment files tell the operator how to hand MCP Machine its
+	// Vault credential, next to the ${VAR} hints.
+	for _, rel := range []string{"compose.yaml", "deploy/quadlet/mcp-machine.container"} {
+		c := readRepoFile(t, rel)
+		for _, want := range []string{"VAULT_ADDR", "VAULT_TOKEN", "${vault:PATH#KEY}"} {
+			if !strings.Contains(c, want) {
+				t.Errorf("%s missing %q", rel, want)
+			}
+		}
+	}
+}

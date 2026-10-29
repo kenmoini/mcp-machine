@@ -553,3 +553,50 @@ func TestFakeKeepsSpecMounts(t *testing.T) {
 		t.Error("Spec of an unknown container")
 	}
 }
+
+func TestFakeImageConfigAndExec(t *testing.T) {
+	e := fake.New()
+	ctx := context.Background()
+	if _, err := e.ImageConfig(ctx, "nope"); !errors.Is(err, runtime.ErrNotFound) {
+		t.Errorf("unknown image: %v", err)
+	}
+	e.MarkImage("plain")
+	if cfg, err := e.ImageConfig(ctx, "plain"); err != nil || cfg.Entrypoint != nil || cfg.Cmd != nil {
+		t.Errorf("plain image: %+v %v", cfg, err)
+	}
+	e.SetImageConfig("img", runtime.ImageConfig{Entrypoint: []string{"/e"}, Cmd: []string{"c"}, User: "node"})
+	cfg, err := e.ImageConfig(ctx, "img")
+	if err != nil || cfg.User != "node" || cfg.Entrypoint[0] != "/e" || cfg.Cmd[0] != "c" {
+		t.Errorf("image config = %+v %v", cfg, err)
+	}
+
+	if _, err := e.CreateContainer(ctx, runtime.ContainerSpec{Name: "s", Image: "img", SecretEnv: map[string]string{"T": "x"}}); err == nil {
+		t.Error("SecretEnv accepted")
+	}
+	id, err := e.CreateContainer(ctx, runtime.ContainerSpec{Name: "c", Image: "img"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Exec(ctx, id, []string{"sh"}, nil); err == nil {
+		t.Error("exec in a created container succeeded")
+	}
+	if err := e.StartContainer(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	e.SetExecExit(3)
+	code, err := e.Exec(ctx, id, []string{"sh", "-c", "cat"}, strings.NewReader("hello"))
+	if err != nil || code != 3 {
+		t.Errorf("exec = %d, %v", code, err)
+	}
+	execs := e.Execs()
+	if len(execs) != 1 || execs[0].ID != id || string(execs[0].Stdin) != "hello" || execs[0].Cmd[2] != "cat" {
+		t.Errorf("execs = %+v", execs)
+	}
+	e.FailNext("Exec", errors.New("boom"))
+	if _, err := e.Exec(ctx, id, []string{"sh"}, nil); err == nil || err.Error() != "boom" {
+		t.Errorf("FailNext: %v", err)
+	}
+	if _, err := e.Exec(ctx, "nope", []string{"sh"}, nil); !errors.Is(err, runtime.ErrNotFound) {
+		t.Errorf("unknown container: %v", err)
+	}
+}

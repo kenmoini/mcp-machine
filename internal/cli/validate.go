@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/kenmoini/mcp-machine/internal/config"
+	"github.com/kenmoini/mcp-machine/internal/vault"
 )
 
 // Where serve and validate look for configuration by default.
@@ -83,12 +86,14 @@ func configWarning(set *config.Set) string {
 // runValidate implements "validate": it prints "ok" for a valid
 // configuration, or the error to stderr with exit code 1. Finding no
 // configuration file at all is an error. With -v it also lists the files
-// read and where each server is defined.
+// read and where each server is defined. With --vault it also reads every
+// ${vault:...} reference from Vault and reports the ones that fail.
 func runValidate(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cf := addConfigFlags(fs)
 	verbose := fs.Bool("v", false, "list the files read and where each server is defined")
+	checkVault := fs.Bool("vault", false, "read every ${vault:...} reference from Vault and report the ones that fail")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -108,6 +113,14 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	if len(set.Files) == 0 {
 		return fail(fmt.Errorf("no configuration found (searched: %s)", searched(set)))
 	}
+	if *checkVault {
+		if problems := vaultProblems(context.Background(), set.Config); len(problems) > 0 {
+			for _, p := range problems {
+				fmt.Fprintf(stderr, "mcp-machine validate: %s\n", p)
+			}
+			return exitRuntime
+		}
+	}
 	fmt.Fprintln(stdout, "ok")
 	if *verbose {
 		fmt.Fprintln(stdout, "files:")
@@ -120,4 +133,56 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return exitOK
+}
+
+// vaultProblems reads every ${vault:...} reference of cfg from Vault and
+// returns a line per reference that cannot be read, or per failure before
+// that (no Vault configured, authentication). A configuration without
+// references never contacts Vault.
+func vaultProblems(ctx context.Context, cfg *config.Config) []string {
+	type ref struct {
+		server string
+		config.Ref
+	}
+	var refs []ref
+	for _, r := range cfg.Registries {
+		for _, v := range []string{r.Username, r.Password} {
+			rs, _ := config.ParseRefs(v)
+			for _, x := range rs {
+				refs = append(refs, ref{"", x})
+			}
+		}
+	}
+	for _, s := range cfg.Servers {
+		rs, _ := config.CheckVaultRefs(s)
+		for _, x := range rs {
+			refs = append(refs, ref{s.Name, x})
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	if !cfg.Vault.Configured() {
+		return []string{"vault is not configured (no vault.address)"}
+	}
+	vc, err := vault.New(vault.FromConfig(cfg.Vault), slog.New(slog.DiscardHandler))
+	if err != nil {
+		return []string{err.Error()}
+	}
+	if err := vc.Start(ctx); err != nil {
+		return []string{err.Error()}
+	}
+	defer vc.Close()
+	var out []string
+	rv := &vault.Resolver{Reader: vc}
+	for _, r := range refs {
+		if _, err := rv.Resolve(ctx, r.String()); err != nil {
+			where := "registries"
+			if r.server != "" {
+				where = fmt.Sprintf("server %q", r.server)
+			}
+			out = append(out, fmt.Sprintf("%s: %v", where, err))
+		}
+	}
+	return out
 }

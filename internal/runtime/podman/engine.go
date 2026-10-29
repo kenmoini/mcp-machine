@@ -183,7 +183,14 @@ func containerfilePath(contextDir, containerfile string) string {
 	return filepath.Join(contextDir, containerfile)
 }
 
+// errSecretEnv is returned for a spec whose SecretEnv was not resolved:
+// passing it on would put the references (or worse) into the container.
+var errSecretEnv = errors.New("runtime: SecretEnv must be resolved before create")
+
 func (e *Engine) CreateContainer(ctx context.Context, spec runtime.ContainerSpec) (string, error) {
+	if len(spec.SecretEnv) > 0 {
+		return "", errSecretEnv
+	}
 	c, done := e.ctx(ctx)
 	defer done()
 	resp, err := containers.CreateWithSpec(c, toSpecGen(spec), nil)
@@ -191,6 +198,22 @@ func (e *Engine) CreateContainer(ctx context.Context, spec runtime.ContainerSpec
 		return "", mapErr(err)
 	}
 	return resp.ID, nil
+}
+
+func (e *Engine) ImageConfig(ctx context.Context, ref string) (runtime.ImageConfig, error) {
+	c, done := e.ctx(ctx)
+	defer done()
+	report, err := images.GetImage(c, ref, nil)
+	if err != nil {
+		return runtime.ImageConfig{}, mapErr(err)
+	}
+	var out runtime.ImageConfig
+	if report != nil && report.ImageData != nil && report.Config != nil {
+		out.Entrypoint = append([]string(nil), report.Config.Entrypoint...)
+		out.Cmd = append([]string(nil), report.Config.Cmd...)
+		out.User = report.Config.User
+	}
+	return out, nil
 }
 
 func (e *Engine) StartContainer(ctx context.Context, id string) error {

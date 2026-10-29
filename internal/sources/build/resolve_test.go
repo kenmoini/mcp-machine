@@ -118,3 +118,28 @@ func TestBuildResolveLeavesRegistryAuthNil(t *testing.T) {
 		t.Fatalf("RegistryAuth = %+v; want nil", res.Image.Build.RegistryAuth)
 	}
 }
+
+func TestBuildResolveSplitsSecretEnv(t *testing.T) {
+	cfg := &config.Config{Podman: config.PodmanConfig{Network: "n"}}
+	spec := config.ServerSpec{
+		Name:      "b",
+		Build:     &config.BuildSpec{Repo: "https://example.com/r.git"},
+		Env:       map[string]string{"A": "${vault:kv/data/a#k}", "B": "plain"},
+		Container: &config.ContainerOverrides{Env: map[string]string{"C": "x${vault:kv/data/c#k}"}},
+	}
+	res, err := Resolve(cfg, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := res.Container
+	if !reflect.DeepEqual(cs.Env, map[string]string{"B": "plain"}) {
+		t.Errorf("Env = %v", cs.Env)
+	}
+	if !reflect.DeepEqual(cs.SecretEnv, map[string]string{"A": "${vault:kv/data/a#k}", "C": "x${vault:kv/data/c#k}"}) {
+		t.Errorf("SecretEnv = %v", cs.SecretEnv)
+	}
+	// The spec's own map is untouched.
+	if spec.Env["A"] != "${vault:kv/data/a#k}" || len(spec.Env) != 2 {
+		t.Errorf("spec.Env modified: %v", spec.Env)
+	}
+}

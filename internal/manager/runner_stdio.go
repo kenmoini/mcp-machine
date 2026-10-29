@@ -14,8 +14,11 @@ import (
 // http pipeline (runner_http.go).
 
 // attachAndStart attaches to the container's stdio (before starting it, so
-// no output is lost), starts it, and connects the facade to it.
-func (r *runner) attachAndStart(ctx context.Context) {
+// no output is lost), starts it, delivers its secrets (secrets, when not
+// empty: see secretenv.go), and connects the facade to it. The MCP
+// handshake simply waits until the wrapper has the secrets and execs the
+// server.
+func (r *runner) attachAndStart(ctx context.Context, secrets map[string]string) {
 	id := r.status.ContainerID
 	rwc, err := r.m.engine.Attach(ctx, id)
 	if err != nil {
@@ -25,6 +28,11 @@ func (r *runner) attachAndStart(ctx context.Context) {
 	if err := r.m.engine.StartContainer(ctx, id); err != nil {
 		_ = rwc.Close()
 		r.failAttempt(ctx, fmt.Errorf("start container: %w", err))
+		return
+	}
+	if err := r.startedWithSecrets(ctx, id, secrets); err != nil {
+		_ = rwc.Close()
+		r.failAttempt(ctx, err)
 		return
 	}
 	// Cancelling the attempt must unblock a dial stuck writing to a backend

@@ -102,3 +102,39 @@ func TestToSpecGenRelabel(t *testing.T) {
 		t.Errorf("volume options = %v, want %v", g.Volumes[0].Options, want)
 	}
 }
+
+func TestToSpecGenTmpfsMount(t *testing.T) {
+	g := toSpecGen(runtime.ContainerSpec{Image: "img", Mounts: []runtime.Mount{
+		{Type: "tmpfs", Target: "/run/mcp-machine", Options: "nosuid,nodev,noexec,mode=1777,size=1m"},
+	}})
+	if len(g.Mounts) != 1 {
+		t.Fatalf("mounts = %+v", g.Mounts)
+	}
+	m := g.Mounts[0]
+	if m.Type != "tmpfs" || m.Source != "tmpfs" || m.Destination != "/run/mcp-machine" {
+		t.Errorf("mount = %+v", m)
+	}
+	if want := []string{"rw", "nosuid", "nodev", "noexec", "mode=1777", "size=1m"}; !reflect.DeepEqual(m.Options, want) {
+		t.Errorf("options = %v, want %v", m.Options, want)
+	}
+	if len(g.Volumes) != 0 {
+		t.Errorf("a tmpfs became a named volume: %+v", g.Volumes)
+	}
+}
+
+func TestCreateRejectsSecretEnv(t *testing.T) {
+	e := &Engine{}
+	_, err := e.CreateContainer(t.Context(), runtime.ContainerSpec{Image: "img", SecretEnv: map[string]string{"T": "${vault:kv/data/a#k}"}})
+	if err == nil || err.Error() != "runtime: SecretEnv must be resolved before create" {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestTailWriterKeepsTail(t *testing.T) {
+	w := &tailWriter{limit: 5}
+	_, _ = w.Write([]byte("abcdefgh"))
+	_, _ = w.Write([]byte("ij\n"))
+	if got := w.String(); got != "ghij" {
+		t.Errorf("tail = %q", got)
+	}
+}

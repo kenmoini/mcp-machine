@@ -457,12 +457,38 @@ func (r *runner) start() {
 				r.resumeHTTP(ctx, info.State == "running")
 				return
 			}
-			r.set(store.StateCreating, "")
-			r.attachAndStart(ctx)
+			r.resumeStdio(ctx)
 			return
 		}
 	}
 	r.launch(false)
+}
+
+// resumeStdio restarts a stopped (or adopted) stdio container. An adopted
+// one was never resolved by this process, so it is resolved first: the
+// resolve says which environment variables come from Vault and must be
+// delivered again (the container's tmpfs is empty on every start).
+func (r *runner) resumeStdio(ctx context.Context) {
+	if r.resolved == nil || r.resolved.Container == nil {
+		r.set(store.StateResolving, "")
+		res, err := r.m.resolver.Resolve(ctx, r.m.config(), r.spec)
+		if err != nil {
+			r.failAttempt(ctx, fmt.Errorf("resolve: %w", err))
+			return
+		}
+		if res.Kind != sources.KindContainer || res.Container == nil || res.Transport != "stdio" {
+			r.failAttempt(ctx, fmt.Errorf("manager: server %q no longer resolves to a stdio container", r.name))
+			return
+		}
+		r.resolved = &res
+	}
+	r.set(store.StateCreating, "")
+	vals, err := r.prepareSecrets(ctx)
+	if err != nil {
+		r.failAttempt(ctx, err)
+		return
+	}
+	r.attachAndStart(ctx, vals)
 }
 
 // resumable reports whether the stopped container still exists and was
@@ -555,6 +581,11 @@ func (r *runner) create(ctx context.Context) {
 		spec.Network = cfg.Podman.Network
 	}
 	spec.Image = r.image
+	vals, err := r.installSecrets(ctx, &spec)
+	if err != nil {
+		r.failAttempt(ctx, err)
+		return
+	}
 	labels := maps.Clone(spec.Labels)
 	if labels == nil {
 		labels = map[string]string{}
@@ -576,10 +607,10 @@ func (r *runner) create(ctx context.Context) {
 	}
 	r.status.ContainerID = id
 	if transport == "http" {
-		r.startHTTP(ctx, false)
+		r.startHTTP(ctx, false, vals)
 		return
 	}
-	r.attachAndStart(ctx)
+	r.attachAndStart(ctx, vals)
 }
 
 // clearName removes a container that already holds name, so the create that
@@ -659,7 +690,11 @@ func (r *runner) ensureImage(ctx context.Context, res sources.Resolved, force bo
 		return "", fmt.Errorf("check image %s: %w", ref, err)
 	}
 	if !ok {
-		if err := r.m.engine.PullImage(ctx, ref, res.Image.Auth, io.Discard); err != nil {
+		auth, err := r.resolveAuth(ctx, res.Image.Auth)
+		if err != nil {
+			return "", fmt.Errorf("pull %s: registry credentials: %w", ref, err)
+		}
+		if err := r.m.engine.PullImage(ctx, ref, auth, io.Discard); err != nil {
 			return "", fmt.Errorf("pull %s: %w", ref, err)
 		}
 	}

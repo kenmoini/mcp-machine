@@ -21,7 +21,10 @@ allowed_origins: []                    # exact origins, e.g. "http://mcp.lan:808
 registries:
   - registry: ghcr.io
     username: "${GHCR_USER}"
-    password: "${GHCR_TOKEN}"
+    password: "${GHCR_TOKEN}"           # or "${vault:kv/data/ghcr#token}" with a vault section
+# vault:                                # read ${vault:PATH#KEY} references from Vault / OpenBao
+#   address: https://vault.lan:8200     # env VAULT_ADDR overrides
+#   token: "${VAULT_TOKEN}"             # or token_file, or approle: {role_id, secret_id_file}
 runtimes:                              # images used for `command` servers
   npx:  docker.io/library/node:22-bookworm-slim
   node: docker.io/library/node:22-bookworm-slim

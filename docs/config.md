@@ -37,6 +37,7 @@ Every key except `servers` is global and may be set only in the base file.
 | `data_dir` | string | `/data` | Data directory. |
 | `allowed_origins` | list of strings | `[]` | Extra trusted origins for cross-origin requests to the MCP routes, each an absolute origin such as `http://mcp.lan:8080`. Their host names are also accepted by the [host check](#host-check). |
 | `registries` | list | `[]` | Credentials for private image registries (below). |
+| `vault` | section | unset | How to reach HashiCorp Vault or OpenBao for `${vault:PATH#KEY}` references (below). Read at startup only. |
 | `runtimes` | map | see below | Image used for each `command.command` value. |
 | `log.level` | string | `info` | `debug`, `info`, `warn`, or `error`. An unrecognized value falls back to `info`. |
 | `log.format` | string | `text` | `text` or `json` (anything other than `json` logs text). |
@@ -52,6 +53,31 @@ prefix, and used for pulls and for the base images of `build` servers.
 | `registry` | string | Registry host, for example `ghcr.io`. |
 | `username` | string | Username. `${VAR}` allowed. |
 | `password` | string | Password or token. `${VAR}` allowed. |
+
+### vault
+
+Where `${vault:PATH#KEY}` references are read from (see [Secrets from
+Vault](#secrets-from-vault)). The section is read at startup only, like
+`podman.socket`; changing it needs a restart. Exactly one way to
+authenticate must be given: `token`, `token_file`, or `approle`.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `address` | string | empty | Vault's base URL, for example `https://vault.lan:8200`. Must be an absolute `http://` or `https://` URL. Required for any `${vault:...}` reference. `${VAR}` allowed. |
+| `namespace` | string | empty | Vault Enterprise or OpenBao namespace, sent as `X-Vault-Namespace`. |
+| `ca_file` | string | empty | PEM file (inside the MCP Machine container) with the CA that signed Vault's certificate. |
+| `tls_skip_verify` | bool | `false` | Skip verifying Vault's certificate. Not with `ca_file`. |
+| `token` | string | empty | A Vault token. `${VAR}` allowed, so `"${VAULT_TOKEN}"` reads it from the environment. |
+| `token_file` | string | empty | A file holding a Vault token, for example a Vault Agent auto-auth sink. |
+| `approle.role_id`, `approle.role_id_file` | string | empty | The AppRole's role ID, inline or in a file. One of the two. |
+| `approle.secret_id`, `approle.secret_id_file` | string | empty | The AppRole's secret ID, inline or in a file. One of the two. |
+| `timeout` | duration | `10s` | Per-request timeout. Minimum `1s`. |
+
+The Vault CLI's environment variables override the file when set and
+non-empty: `VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_NAMESPACE`, `VAULT_CACERT`, and
+`VAULT_SKIP_VERIFY` (`true`/`false`). With them a base file needs no `vault`
+section at all: `-e VAULT_ADDR=... -e VAULT_TOKEN=...` on the MCP Machine
+container is enough.
 
 ### runtimes
 
@@ -194,12 +220,26 @@ directory; that does not extend to the server containers it starts.
 
 `${NAME}` (letters, digits, underscore; not starting with a digit) is replaced
 from MCP Machine's own environment when the file is loaded. These fields are
-expanded: `registries[].username` and `password`; each server's `env`;
-`remote.headers`; `command.env`; `container.env`; `build.args`;
-`build.auth.token`. `command.run` (its `-e` values and image arguments) and
-`command.args` are expanded too, when the container is created; the loaded
-configuration keeps them as written. Other fields (URLs, paths, volumes) are
-used as written.
+expanded: `registries[].username` and `password`; the `vault` section's
+strings; each server's `env`; `remote.headers`; `command.env`;
+`container.env`; `build.args`; `build.auth.token`. `command.run` (its `-e`
+values and image arguments) and `command.args` are expanded too, when the
+container is created; the loaded configuration keeps them as written. Other
+fields (URLs, paths, volumes) are used as written.
+
+`${vault:PATH#KEY}` is the other kind of reference: a key of a secret in Vault,
+read when the server starts rather than when the file is loaded. It is
+allowed in `env`, `command.env`, `container.env`, the `-e` values of
+`command.run`, `remote.headers`, `registries[].username` and `password`, and
+`build.auth.token`, and refused everywhere else (`command.args`, the rest of a
+run line, `build.args`, URLs, images, volumes), where it would end up in the
+process list or baked into an image. See [Secrets from
+Vault](#secrets-from-vault). A reference in a field that cannot take it, a
+malformed one, or any reference without `vault.address` rejects the file:
+`config: server "fetch": ${vault:...} is not allowed in command.args`,
+`config: server "fetch": env: invalid reference "${vault:kv/x}": want
+${vault:PATH#KEY}`, `config: ${vault:...} references need vault.address
+(referenced by server "fetch", defined in ...)`.
 
 A `${NAME}` that is not set, in any of these fields, is an error that names
 the variable and the servers that reference it, with the files that define
@@ -209,10 +249,108 @@ the previous configuration). Supply the variables with `podman run -e NAME`, an
 `environment:` block in `compose.yaml`, or `EnvironmentFile=` in the Quadlet
 unit.
 
-The UI never shows resolved secrets, and the forms keep `${VAR}` references
-verbatim. A form (add, edit, or import) that references a variable MCP
-Machine's environment does not set is refused with `environment variable NAME
-is not set`, so the UI never writes a file the next start would reject.
+The UI never shows resolved secrets, and the forms keep `${VAR}` and
+`${vault:...}` references verbatim. A form (add, edit, or import) that
+references a variable MCP Machine's environment does not set is refused with
+`environment variable NAME is not set`, and one with a `${vault:...}` in a
+field that cannot take it, or without a `vault.address`, with the loader's
+message, so the UI never writes a file the next start would reject.
+
+## Secrets from Vault
+
+With a `vault` section (or `VAULT_ADDR` and `VAULT_TOKEN`), a value may name a
+key of a Vault secret instead of an environment variable:
+
+```yaml
+vault:
+  address: https://vault.lan:8200
+  approle:
+    role_id: 7a1c...                       # or role_id_file
+    secret_id_file: /etc/mcp-machine/vault-secret-id
+
+servers:
+  - name: github
+    type: command
+    command:
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${vault:kv/data/github#token}"
+  - name: copilot
+    type: remote
+    remote:
+      url: https://api.githubcopilot.com/mcp/
+      headers: { Authorization: "Bearer ${vault:kv/data/github#token}" }
+```
+
+`PATH` is the secret's API path under `/v1/`: for a KV **version 2** mount it
+includes `data/` (`kv/data/github` for `vault kv get kv/github`); for a KV
+version 1 mount it does not (`kv/github`). Any other secret engine whose read
+returns a data object works the same way. `KEY` is a key of that data, and its
+value must be a string. The reference can sit inside a longer value
+(`"Bearer ${vault:...}"`) and next to `${VAR}` references. The same reference
+in several fields of a server reads the secret once per start.
+
+MCP Machine needs a token that can read the referenced paths and nothing
+more. A policy for the example above:
+
+```hcl
+path "kv/data/github" { capabilities = ["read"] }
+```
+
+Give it a token (`vault token create -policy=mcp-machine -orphan -period=24h`
+and `VAULT_TOKEN` or `token_file`), or an AppRole with that policy. The token
+is checked at startup (`lookup-self`; the log line shows its policies and TTL)
+and renewed in the background at two thirds of its TTL; with an AppRole, MCP
+Machine logs in again when a renewal fails. A Vault that is down at startup
+only delays the servers that reference it: they fail with the Vault error and
+retry with the usual backoff.
+
+**How a secret reaches a container.** The reference text, never the value,
+is in the loaded configuration, in the container's create spec, and in the
+spec hash. When a container server with references starts, MCP Machine reads
+the secrets, creates the container with a small tmpfs at `/run/mcp-machine`
+and a `/bin/sh` wrapper as entrypoint (`podman inspect` shows the wrapper as
+`Entrypoint` and the image's own entrypoint and command as `Cmd`), starts it,
+and streams `NAME='value'` lines into `/run/mcp-machine/env` over `podman
+exec`. The wrapper waits for that file (up to 60 seconds), sources it,
+deletes it, and `exec`s the image's own command with the variables in its
+environment. Nothing is written to disk and nothing shows in `podman
+inspect`. Servers without references are created exactly as before, with no
+wrapper and no tmpfs. The image must have `/bin/sh` (the stock `node`, `uv`,
+and `python` images do); an image without it exits at once with `exec
+/bin/sh: no such file or directory`, which the server page shows.
+
+Values for MCP Machine's own use (`remote.headers`, registry credentials,
+`build.auth.token`) are resolved in memory at the moment of use: when the
+remote server is dialled, the image is pulled, or the repository is cloned.
+
+**Rotation.** A changed secret does not change the spec hash, so the
+container is not recreated. Restart the server (or Stop and Start it) to
+read the new value: every start, including the one after an MCP Machine
+restart, delivers the secrets again. A `remote` server reads its headers
+again on every connect.
+
+`mcp-machine validate --vault` reads every referenced key and reports the
+ones that fail (`server "github": ${vault:kv/data/github#token}: vault: read
+kv/data/github: 403 permission denied`), so a policy mistake is found before
+a server fails.
+
+What this does and does not protect: the secret is never in a file MCP
+Machine writes, never in Podman's on-disk container configuration or
+`podman inspect`, never in a container label, and never in MCP Machine's
+environment. It is in the server process's environment (that is the point),
+readable by anything running in that container and by root on the host, and
+briefly in MCP Machine's memory during delivery. MCP Machine's Vault token
+can read every path its policy allows, and the UI has no authentication, so
+anyone who can reach the UI can define a server that prints any of those
+paths: keep the policy to the exact paths the servers need. See
+[SECURITY.md](../SECURITY.md).
+
+Containers created by a version without Vault support from a file that
+already held a literal `${vault:...}` keep their hash and are adopted on
+upgrade, but have no wrapper; their first delivery fails and the retry
+recreates them.
 
 ## Configuration layers
 

@@ -13,7 +13,7 @@ and the paused flag are visible on the dashboard, on the server page, and in
 | `resolving` | The config entry is being turned into an endpoint or a container spec. |
 | `building` | A `build` server is cloning its repository and building the image. |
 | `image-ready` | The image is present (pulled, or built). |
-| `creating` | The container is being created and started. For stdio this is attach, then start. |
+| `creating` | The container is being created and started. For stdio this is attach, then start. A server with `${vault:...}` secrets reads them from Vault first (a Vault failure fails the attempt here, before anything is created) and delivers them into the container right after the start. |
 | `running` | The container is up. |
 | `connecting` | MCP Machine is establishing the backend MCP session. For an http-mode container this includes probing the endpoint for up to 60 seconds. |
 | `ready` | The session is bound to the facade; the server's `/mcp` and `/sse` routes answer. |
@@ -97,7 +97,13 @@ The spec hash is the sha256 of the canonical JSON of the server entry (with
 `enabled` cleared) plus the runtime image the entry depends on. Because
 `${VAR}` references are resolved before hashing, changing the value of an
 environment variable that an entry uses also changes its hash and recreates
-that server.
+that server. `${vault:...}` references are hashed as written, so rotating a
+secret in Vault changes nothing here: the new value is read at the next
+start (Restart, or Stop and Start), which delivers the secrets again into
+the kept container. The wrapper inside the container waits up to 60 seconds
+for the delivery, independently of the 60-second http probe budget; delivery
+normally takes milliseconds, and a Vault that does not answer fails the
+attempt before the container exists.
 
 ## Adoption
 

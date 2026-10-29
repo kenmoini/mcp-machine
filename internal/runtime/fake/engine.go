@@ -49,12 +49,25 @@ type Engine struct {
 	nextID     int
 	nextBuild  int
 	images     map[string]bool
+	imageCfgs  map[string]runtime.ImageConfig
 	builds     []runtime.BuildRequest
 	pulls      []string
+	pullAuths  []*runtime.RegistryAuth
 	networks   []string
 	conns      [][2]string
 	calls      []string
 	failures   map[string][]error
+	execs      []ExecCall
+	execExit   int
+	onStart    func(id string)
+}
+
+// ExecCall records one Exec: the container, the command and everything read
+// from its stdin.
+type ExecCall struct {
+	ID    string
+	Cmd   []string
+	Stdin []byte
 }
 
 var _ runtime.Engine = (*Engine)(nil)
@@ -64,6 +77,7 @@ func New() *Engine {
 	return &Engine{
 		containers: map[string]*container{},
 		images:     map[string]bool{},
+		imageCfgs:  map[string]runtime.ImageConfig{},
 		failures:   map[string][]error{},
 	}
 }
@@ -148,13 +162,18 @@ func (e *Engine) ImageExists(_ context.Context, ref string) (bool, error) {
 	return e.images[ref], nil
 }
 
-func (e *Engine) PullImage(_ context.Context, ref string, _ *runtime.RegistryAuth, progress io.Writer) error {
+func (e *Engine) PullImage(_ context.Context, ref string, auth *runtime.RegistryAuth, progress io.Writer) error {
 	e.mu.Lock()
 	if err := e.begin("PullImage"); err != nil {
 		e.mu.Unlock()
 		return err
 	}
 	e.pulls = append(e.pulls, ref)
+	if auth != nil {
+		a := *auth
+		auth = &a
+	}
+	e.pullAuths = append(e.pullAuths, auth)
 	e.images[ref] = true
 	e.mu.Unlock()
 	// Write outside the lock: the writer may block or call back into e.
@@ -183,6 +202,9 @@ func (e *Engine) CreateContainer(_ context.Context, spec runtime.ContainerSpec) 
 	defer e.mu.Unlock()
 	if err := e.begin("CreateContainer"); err != nil {
 		return "", err
+	}
+	if len(spec.SecretEnv) > 0 {
+		return "", errors.New("runtime: SecretEnv must be resolved before create")
 	}
 	for _, c := range e.containers {
 		if c.info.Name == spec.Name {
@@ -225,7 +247,21 @@ func (e *Engine) StartContainer(_ context.Context, id string) error {
 		c.info.ExitCode = 0
 	}
 	c.info.State = "running"
+	if hook := e.onStart; hook != nil {
+		e.mu.Unlock()
+		hook(c.info.ID)
+		e.mu.Lock()
+	}
 	return nil
+}
+
+// OnStart registers hook to run, outside the lock, each time a container
+// starts, before StartContainer returns; for example to make it exit at
+// once.
+func (e *Engine) OnStart(hook func(id string)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onStart = hook
 }
 
 func (e *Engine) StopContainer(_ context.Context, id string, _ time.Duration) error {
@@ -369,6 +405,105 @@ func (e *Engine) Wait(ctx context.Context, id string) (int, error) {
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
+}
+
+// ImageConfig returns the configuration registered with SetImageConfig, or
+// a zero one for an image that merely exists; an unknown image is ErrNotFound.
+func (e *Engine) ImageConfig(_ context.Context, ref string) (runtime.ImageConfig, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.begin("ImageConfig"); err != nil {
+		return runtime.ImageConfig{}, err
+	}
+	if cfg, ok := e.imageCfgs[ref]; ok {
+		return cloneImageConfig(cfg), nil
+	}
+	if e.images[ref] {
+		return runtime.ImageConfig{}, nil
+	}
+	return runtime.ImageConfig{}, runtime.ErrNotFound
+}
+
+// Exec records the call (reading stdin to EOF) and returns the exit code
+// set by SetExecExit (0 by default). The container must be running.
+func (e *Engine) Exec(_ context.Context, id string, cmd []string, stdin io.Reader) (int, error) {
+	e.mu.Lock()
+	if err := e.begin("Exec"); err != nil {
+		e.mu.Unlock()
+		return 0, err
+	}
+	c, ok := e.find(id)
+	if !ok {
+		e.mu.Unlock()
+		return 0, runtime.ErrNotFound
+	}
+	if c.info.State != "running" {
+		e.mu.Unlock()
+		return 0, fmt.Errorf("runtime: cannot exec in %s container", c.info.State)
+	}
+	cid, code := c.info.ID, e.execExit
+	e.mu.Unlock()
+
+	var in []byte
+	if stdin != nil {
+		b, err := io.ReadAll(stdin)
+		if err != nil {
+			return 0, err
+		}
+		in = b
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.execs = append(e.execs, ExecCall{ID: cid, Cmd: append([]string(nil), cmd...), Stdin: in})
+	return code, nil
+}
+
+// Execs returns the recorded Exec calls, in order.
+func (e *Engine) Execs() []ExecCall {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]ExecCall, len(e.execs))
+	for i, c := range e.execs {
+		out[i] = ExecCall{ID: c.ID, Cmd: append([]string(nil), c.Cmd...), Stdin: append([]byte(nil), c.Stdin...)}
+	}
+	return out
+}
+
+// SetExecExit sets the exit code every following Exec returns.
+func (e *Engine) SetExecExit(code int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.execExit = code
+}
+
+// SetImageConfig registers an image (marking it present) with the
+// configuration ImageConfig returns for it.
+func (e *Engine) SetImageConfig(ref string, cfg runtime.ImageConfig) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.images[ref] = true
+	e.imageCfgs[ref] = cloneImageConfig(cfg)
+}
+
+// PullAuths returns the credentials passed to each PullImage, in order (nil
+// entries for pulls without credentials).
+func (e *Engine) PullAuths() []*runtime.RegistryAuth {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]*runtime.RegistryAuth, len(e.pullAuths))
+	for i, a := range e.pullAuths {
+		if a != nil {
+			c := *a
+			out[i] = &c
+		}
+	}
+	return out
+}
+
+func cloneImageConfig(c runtime.ImageConfig) runtime.ImageConfig {
+	c.Entrypoint = append([]string(nil), c.Entrypoint...)
+	c.Cmd = append([]string(nil), c.Cmd...)
+	return c
 }
 
 // Spec returns the spec a container was created with (mounts included, as

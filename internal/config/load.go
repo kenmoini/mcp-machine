@@ -19,6 +19,19 @@ import (
 // podmanSocketEnv overrides podman.socket when set.
 const podmanSocketEnv = "MCP_MACHINE_PODMAN_SOCKET"
 
+// The Vault CLI's environment variables, which override the vault section
+// when set and non-empty (see applyVaultEnv).
+const (
+	vaultAddrEnv       = "VAULT_ADDR"
+	vaultTokenEnv      = "VAULT_TOKEN" //nolint:gosec // G101: the name of an environment variable, not a credential
+	vaultNamespaceEnv  = "VAULT_NAMESPACE"
+	vaultCACertEnv     = "VAULT_CACERT"
+	vaultSkipVerifyEnv = "VAULT_SKIP_VERIFY"
+)
+
+// defaultVaultTimeout bounds each Vault request.
+const defaultVaultTimeout = 10 * time.Second
+
 var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 var defaultRuntimes = map[string]string{
@@ -55,12 +68,81 @@ func decode(data []byte) (*Config, error) {
 	return c, nil
 }
 
-// finish applies defaults to c and expands ${VAR} references using lookup.
-// where, when not nil, describes where a server is defined for the errors
-// about unset variables (see expandEnv).
+// finish applies defaults to c, expands ${VAR} references using lookup and
+// checks the ${vault:...} references. where, when not nil, describes where a
+// server is defined for the errors about unset variables and references
+// (see expandEnv and checkVaultRefs). Every problem is reported, joined.
 func finish(c *Config, lookup func(string) (string, bool), where func(server string) string) error {
 	ApplyDefaults(c)
-	return expandEnv(c, lookup, where)
+	return errors.Join(expandEnv(c, lookup, where), checkVaultRefs(c, where))
+}
+
+// applyVaultEnv overrides the vault section with the Vault CLI's environment
+// variables, each when set and non-empty: VAULT_ADDR, VAULT_TOKEN,
+// VAULT_NAMESPACE, VAULT_CACERT and VAULT_SKIP_VERIFY ("1", "t", "true" and
+// the like set it; "0", "false" clear it; anything else is ignored).
+func applyVaultEnv(c *Config, lookup func(string) (string, bool)) {
+	get := func(name string) (string, bool) {
+		v, ok := lookup(name)
+		return v, ok && v != ""
+	}
+	if v, ok := get(vaultAddrEnv); ok {
+		c.Vault.Address = v
+	}
+	if v, ok := get(vaultTokenEnv); ok {
+		c.Vault.Token = v
+	}
+	if v, ok := get(vaultNamespaceEnv); ok {
+		c.Vault.Namespace = v
+	}
+	if v, ok := get(vaultCACertEnv); ok {
+		c.Vault.CAFile = v
+	}
+	if v, ok := get(vaultSkipVerifyEnv); ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.Vault.TLSSkipVerify = b
+		}
+	}
+}
+
+// checkVaultRefs validates every ${vault:...} reference of c: one in a field
+// that cannot take it, or malformed, is an error (see CheckVaultRefs), and
+// any reference at all without vault.address is the error
+// `config: ${vault:...} references need vault.address (referenced by ...)`,
+// phrased like the unset-variable errors.
+func checkVaultRefs(c *Config, where func(server string) string) error {
+	var errs []error
+	var referrers []string
+	global := false
+	for _, r := range c.Registries {
+		for _, v := range []string{r.Username, r.Password} {
+			if _, err := ParseRefs(v); err != nil {
+				errs = append(errs, fmt.Errorf("config: registries: %w", err))
+			} else if HasVaultRef(v) {
+				global = true
+			}
+		}
+	}
+	for _, v := range []string{c.Vault.Address, c.Vault.Namespace, c.Vault.CAFile, c.Vault.Token, c.Vault.TokenFile} {
+		if HasVaultRef(v) {
+			errs = append(errs, errors.New("config: ${vault:...} is not allowed in the vault section"))
+			break
+		}
+	}
+	for i := range c.Servers {
+		s := &c.Servers[i]
+		refs, problems := CheckVaultRefs(*s)
+		for _, err := range problems {
+			errs = append(errs, fmt.Errorf("config: %w", err))
+		}
+		if len(refs) > 0 {
+			referrers = append(referrers, s.Name)
+		}
+	}
+	if (global || len(referrers) > 0) && !c.Vault.Configured() {
+		errs = append(errs, fmt.Errorf("config: ${vault:...} references need vault.address%s", referencedBy(referrers, where)))
+	}
+	return errors.Join(errs...)
 }
 
 // dropIn is the shape of a drop-in file: a servers list and nothing else.
@@ -119,6 +201,9 @@ func ApplyDefaults(c *Config) {
 	setDefault(&c.WorkspaceDir, path.Join(c.DataDir, "workspace"))
 	setDefault(&c.Log.Level, "info")
 	setDefault(&c.Log.Format, "text")
+	if c.Vault.Timeout == 0 {
+		c.Vault.Timeout = defaultVaultTimeout
+	}
 
 	if c.Runtimes == nil {
 		c.Runtimes = make(map[string]string, len(defaultRuntimes))
@@ -168,6 +253,15 @@ func expandEnv(c *Config, lookup func(string) (string, bool), where func(server 
 		r := &c.Registries[i]
 		r.Username = expand(r.Username)
 		r.Password = expand(r.Password)
+	}
+	v := &c.Vault
+	for _, p := range []*string{&v.Address, &v.Namespace, &v.CAFile, &v.Token, &v.TokenFile} {
+		*p = expand(*p)
+	}
+	if a := v.AppRole; a != nil {
+		for _, p := range []*string{&a.RoleID, &a.RoleIDFile, &a.SecretID, &a.SecretIDFile} {
+			*p = expand(*p)
+		}
 	}
 	referrers := map[string][]string{} // variable → the servers referencing it
 	for i := range c.Servers {

@@ -135,3 +135,18 @@ Known gaps and improvements deferred past v1. Each entry names where the behavio
 - `serve -h` exits 2; only the top-level `help`/`-h` exit 0.
 - The config example and docs could mention that `enabled` omitted in a scripted POST re-enables a server.
 - Blanking a scalar from a later admin layer is not possible in v1: an empty or zero value in a system drop-in keeps what the base file set. It would need a tombstone or an explicit-null syntax.
+
+### Deliver `${VAR}` environment through the secrets tmpfs too
+- Where: `internal/manager/secretenv.go`, `internal/sources/command/resolve.go`.
+- Symptom: a `${VAR}` secret still lands in the create spec, which Podman persists on disk and shows in `podman inspect`; only `${vault:...}` values go through the tmpfs delivery.
+- Fix: route every expanded env value through `SecretEnv`. It would change the create spec of every server (wrapper entrypoint, tmpfs) and so recreate every container once on upgrade; needs a migration note.
+
+### Vault secrets as files
+- Where: `internal/manager/secretenv.go`.
+- Symptom: a server that wants a credentials file (`GOOGLE_APPLICATION_CREDENTIALS`, a kubeconfig) has to get it as an env var and write it itself.
+- Fix: a `secret_files:` map of container path to `${vault:...}` reference, delivered into the same tmpfs by the same exec; the wrapper already keeps the directory.
+
+### Images without `/bin/sh` cannot take Vault secrets
+- Where: `internal/manager/secretenv.go` (the wrapper and the delivery command are shell).
+- Symptom: a distroless or scratch image exits with `exec /bin/sh: no such file or directory`.
+- Fix: ship a small static init binary in the MCP Machine image, copy it into a named volume once, and mount it into such containers as the wrapper and the writer.

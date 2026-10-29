@@ -47,3 +47,15 @@ func TestRemoteResolveErrors(t *testing.T) {
 		t.Error("nil remote: want error")
 	}
 }
+
+func TestRemoteResolveKeepsVaultHeaderTemplate(t *testing.T) {
+	res, err := Resolve(nil, config.ServerSpec{Name: "r", Remote: &config.RemoteSpec{
+		URL: "https://x.example/mcp", Headers: map[string]string{"Authorization": "Bearer ${vault:kv/data/a#tok}"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Remote.Headers["Authorization"]; got != "Bearer ${vault:kv/data/a#tok}" {
+		t.Errorf("header = %q, want the reference kept for the dial to resolve", got)
+	}
+}

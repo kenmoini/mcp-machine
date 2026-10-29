@@ -436,6 +436,16 @@ func (u *ui) check(replace string, specs ...config.ServerSpec) (problems []strin
 		for _, name := range config.UnsetVars(s, u.LookupEnv) {
 			problems = append(problems, fmt.Sprintf("server %q: environment variable %s is not set", s.Name, name))
 		}
+		// ${vault:...} references: well-formed, in a field that takes them,
+		// and with a Vault to read them from (the loader refuses the file
+		// otherwise).
+		refs, errs := config.CheckVaultRefs(s)
+		for _, err := range errs {
+			problems = append(problems, err.Error())
+		}
+		if len(refs) > 0 && !cp.Vault.Configured() {
+			problems = append(problems, fmt.Sprintf("server %q: vault is not configured (no vault.address), so ${vault:...} cannot be used", s.Name))
+		}
 	}
 	return append(problems, messages(config.Validate(&cp))...), nil
 }

@@ -3,7 +3,7 @@
   <div class="field">
     <label for="f-env">Environment variables</label>
     <textarea id="f-env" name="env" rows="3" spellcheck="false" placeholder="KEY=value">{{.V "env"}}</textarea>
-    <small class="muted">One KEY=VALUE per line. Use ${NAME} to read a value from the environment of mcp-machine.</small>
+    <small class="muted">One KEY=VALUE per line. Use ${NAME} to read a value from the environment of mcp-machine, or ${vault:path#key} to read a key of a Vault secret.</small>
   </div>
 </fieldset>
 <details{{if or (.V "container.image") (.V "container.volumes") (.V "container.env")}} open{{end}}>

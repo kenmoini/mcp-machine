@@ -13,6 +13,7 @@ import (
 	"github.com/kenmoini/mcp-machine/internal/runtime"
 	"github.com/kenmoini/mcp-machine/internal/sources"
 	"github.com/kenmoini/mcp-machine/internal/store"
+	"github.com/kenmoini/mcp-machine/internal/vault"
 )
 
 // LabelCommit is stamped on built images with the commit they were built from.
@@ -25,7 +26,14 @@ type Builder struct {
 	Cloner    Cloner
 	// Registries supplies credentials for the Containerfile's base image.
 	Registries []config.Registry
+	// Secrets resolves ${vault:...} references in the git token and the
+	// registry credentials, at the moment they are used. Nil means no Vault
+	// is configured: a reference is then an error.
+	Secrets vault.Reader
 }
+
+// errNoVault is the error for a ${vault:...} reference without a Vault.
+var errNoVault = errors.New("vault is not configured; the credentials reference ${vault:...}")
 
 // Build clones the plan's repo into <Workspace>/<name>/src (re-cloned every
 // time, so a moving ref such as a branch is re-resolved) and builds the image,
@@ -46,7 +54,11 @@ func (b *Builder) Build(ctx context.Context, plan sources.BuildPlan, force bool)
 	if err := os.MkdirAll(filepath.Dir(dir), 0o750); err != nil {
 		return "", fmt.Errorf("create workspace for %s: %w", plan.Name, err)
 	}
-	sha, err := b.Cloner.Clone(ctx, plan.Repo, plan.Ref, dir, plan.Auth)
+	gitAuth, err := b.resolveGitAuth(ctx, plan.Auth)
+	if err != nil {
+		return "", fmt.Errorf("git credentials: %w", err)
+	}
+	sha, err := b.Cloner.Clone(ctx, plan.Repo, plan.Ref, dir, gitAuth)
 	if err != nil {
 		return "", err
 	}
@@ -81,6 +93,9 @@ func (b *Builder) Build(ctx context.Context, plan sources.BuildPlan, force bool)
 			auth = sources.RegistryAuthFor(b.Registries, ref)
 		}
 	}
+	if auth, err = b.resolveRegistryAuth(ctx, auth); err != nil {
+		return "", fmt.Errorf("registry credentials: %w", err)
+	}
 	_, err = b.Engine.BuildImage(ctx, runtime.BuildRequest{
 		ContextDir:    ctxDir,
 		Containerfile: plan.Containerfile,
@@ -93,6 +108,39 @@ func (b *Builder) Build(ctx context.Context, plan sources.BuildPlan, force bool)
 		return "", fmt.Errorf("build image %s: %w", tag, err)
 	}
 	return tag, nil
+}
+
+// resolveGitAuth returns auth with a ${vault:...} token resolved (a copy),
+// or auth itself when there is nothing to resolve.
+func (b *Builder) resolveGitAuth(ctx context.Context, auth *config.GitAuth) (*config.GitAuth, error) {
+	if auth == nil || !config.HasVaultRef(auth.Token) {
+		return auth, nil
+	}
+	if b.Secrets == nil {
+		return nil, errNoVault
+	}
+	token, err := vault.Resolve(ctx, b.Secrets, auth.Token)
+	if err != nil {
+		return nil, err
+	}
+	out := *auth
+	out.Token = token
+	return &out, nil
+}
+
+// resolveRegistryAuth is resolveGitAuth for registry credentials.
+func (b *Builder) resolveRegistryAuth(ctx context.Context, auth *runtime.RegistryAuth) (*runtime.RegistryAuth, error) {
+	if auth == nil || (!config.HasVaultRef(auth.Username) && !config.HasVaultRef(auth.Password)) {
+		return auth, nil
+	}
+	if b.Secrets == nil {
+		return nil, errNoVault
+	}
+	m, err := vault.ResolveMap(ctx, b.Secrets, map[string]string{"u": auth.Username, "p": auth.Password})
+	if err != nil {
+		return nil, err
+	}
+	return &runtime.RegistryAuth{Username: m["u"], Password: m["p"]}, nil
 }
 
 // srcDir validates the workspace and plan name and returns the clone

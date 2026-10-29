@@ -45,6 +45,8 @@ func Validate(c *Config) error {
 		}
 	}
 
+	errs = append(errs, validateVault(c.Vault)...)
+
 	seen := make(map[string]bool, len(c.Servers))
 	for i := range c.Servers {
 		s := &c.Servers[i]
@@ -124,6 +126,64 @@ func validateServer(s *ServerSpec, runtimes map[string]string) []error {
 		default:
 			add("serve.mode must be stdio or http")
 		}
+	}
+	return errs
+}
+
+// validateVault returns the problems found in the vault section. An empty
+// section is valid; with an address, exactly one way to authenticate must be
+// given.
+func validateVault(v VaultConfig) []error {
+	var errs []error
+	add := func(msg string) {
+		errs = append(errs, errors.New(msg))
+	}
+	hasAuth := v.Token != "" || v.TokenFile != "" || v.AppRole != nil
+	if v.Address == "" {
+		switch {
+		case v.Token != "":
+			add("vault.token needs vault.address")
+		case v.TokenFile != "":
+			add("vault.token_file needs vault.address")
+		case v.AppRole != nil:
+			add("vault.approle needs vault.address")
+		}
+		return errs
+	}
+	if u, err := url.Parse(v.Address); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		add("vault.address must be an absolute http(s) URL")
+	}
+	if v.Timeout < time.Second {
+		add("vault.timeout must be at least 1s")
+	}
+	if v.TLSSkipVerify && v.CAFile != "" {
+		add("vault.tls_skip_verify and vault.ca_file are mutually exclusive")
+	}
+	if v.Token != "" && v.TokenFile != "" {
+		add("vault.token and vault.token_file are mutually exclusive")
+	}
+	if a := v.AppRole; a != nil {
+		switch {
+		case v.Token != "":
+			add("vault.approle and vault.token are mutually exclusive")
+		case v.TokenFile != "":
+			add("vault.approle and vault.token_file are mutually exclusive")
+		}
+		switch {
+		case a.RoleID != "" && a.RoleIDFile != "":
+			add("vault.approle.role_id and vault.approle.role_id_file are mutually exclusive")
+		case a.RoleID == "" && a.RoleIDFile == "":
+			add("vault.approle needs role_id or role_id_file")
+		}
+		switch {
+		case a.SecretID != "" && a.SecretIDFile != "":
+			add("vault.approle.secret_id and vault.approle.secret_id_file are mutually exclusive")
+		case a.SecretID == "" && a.SecretIDFile == "":
+			add("vault.approle needs secret_id or secret_id_file")
+		}
+	}
+	if !hasAuth {
+		add("vault needs token, token_file, or approle")
 	}
 	return errs
 }

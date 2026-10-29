@@ -54,19 +54,31 @@ func (r *runner) resumeHTTP(ctx context.Context, running bool) {
 		}
 		r.resolved = &res
 	}
+	var secrets map[string]string
 	if !running {
 		r.set(store.StateCreating, "")
+		var err error
+		if secrets, err = r.prepareSecrets(ctx); err != nil {
+			r.failAttempt(ctx, err)
+			return
+		}
 	}
-	r.startHTTP(ctx, running)
+	r.startHTTP(ctx, running, secrets)
 }
 
-// startHTTP starts the container unless it is already running, waits for
-// its MCP endpoint to answer, and connects the facade to it.
-func (r *runner) startHTTP(ctx context.Context, running bool) {
+// startHTTP starts the container unless it is already running, delivering
+// its secrets (secrets, when not empty) right after the start, waits for
+// its MCP endpoint to answer, and connects the facade to it. A container
+// found running (adopted) has its environment already.
+func (r *runner) startHTTP(ctx context.Context, running bool, secrets map[string]string) {
 	id := r.status.ContainerID
 	if !running {
 		if err := r.m.engine.StartContainer(ctx, id); err != nil {
 			r.failAttempt(ctx, fmt.Errorf("start container: %w", err))
+			return
+		}
+		if err := r.startedWithSecrets(ctx, id, secrets); err != nil {
+			r.failAttempt(ctx, err)
 			return
 		}
 	}
@@ -132,13 +144,19 @@ func (r *runner) connectFailed(ctx context.Context, err error) {
 }
 
 // connectRemote dials a remote server and binds the facade to it. It makes
-// no engine calls.
+// no engine calls. Headers holding ${vault:...} references are resolved for
+// this attempt only, so a restart picks up a rotated secret.
 func (r *runner) connectRemote(ctx context.Context) {
 	rem := r.resolved.Remote
 	r.gen++ // tells this session's loss from an earlier one's
 	gen := r.gen
 	r.set(store.StateConnecting, "")
-	sess, err := proxy.DialHTTP(ctx, rem.URL, rem.Transport, rem.Headers, r.facade.ClientOptions())
+	headers, err := r.resolveStrings(ctx, rem.Headers)
+	if err != nil {
+		r.failAttempt(ctx, fmt.Errorf("headers: %w", err))
+		return
+	}
+	sess, err := proxy.DialHTTP(ctx, rem.URL, rem.Transport, headers, r.facade.ClientOptions())
 	if err != nil {
 		r.failAttempt(ctx, fmt.Errorf("connect: %w", err))
 		return

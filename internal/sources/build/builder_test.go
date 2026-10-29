@@ -14,6 +14,7 @@ import (
 	"github.com/kenmoini/mcp-machine/internal/runtime/fake"
 	"github.com/kenmoini/mcp-machine/internal/sources"
 	"github.com/kenmoini/mcp-machine/internal/store"
+	"github.com/kenmoini/mcp-machine/internal/vault"
 )
 
 const testSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -23,12 +24,14 @@ type fakeCloner struct {
 	sha   string
 	calls int
 	err   error
+	auth  *config.GitAuth // the last Clone's credentials
 	// after, if set, runs on the cloned tree (to plant files or symlinks).
 	after func(dir string) error
 }
 
-func (f *fakeCloner) Clone(_ context.Context, _, _, dir string, _ *config.GitAuth) (string, error) {
+func (f *fakeCloner) Clone(_ context.Context, _, _, dir string, auth *config.GitAuth) (string, error) {
 	f.calls++
+	f.auth = auth
 	if f.err != nil {
 		return "", f.err
 	}
@@ -309,5 +312,48 @@ func TestBuilderDoesNotDeleteOutsideWorkspace(t *testing.T) {
 	}
 	if !exists(filepath.Join(victim, "src")) {
 		t.Fatal("directory outside workspace was removed")
+	}
+}
+
+func TestBuildResolvesVaultCredentials(t *testing.T) {
+	fv := &vault.Fake{}
+	fv.Set("kv/data/git", "token", "ghp_real")
+	fv.Set("kv/data/reg", "pass", "reg_real")
+	plan := testPlan()
+	plan.Auth = &config.GitAuth{Token: "${vault:kv/data/git#token}"}
+	plan.RegistryAuth = &runtime.RegistryAuth{Username: "u", Password: "${vault:kv/data/reg#pass}"}
+
+	eng := fake.New()
+	cl := &fakeCloner{sha: testSHA}
+	b := &Builder{Workspace: t.TempDir(), Engine: eng, Cloner: cl, Secrets: fv}
+	if _, err := b.Build(context.Background(), plan, false); err != nil {
+		t.Fatal(err)
+	}
+	if cl.auth == nil || cl.auth.Token != "ghp_real" {
+		t.Errorf("clone auth = %+v, want the resolved token", cl.auth)
+	}
+	if plan.Auth.Token != "${vault:kv/data/git#token}" {
+		t.Error("the plan's template was overwritten")
+	}
+	builds := eng.Builds()
+	if len(builds) != 1 || builds[0].Auth == nil || builds[0].Auth.Password != "reg_real" || builds[0].Auth.Username != "u" {
+		t.Errorf("build auth = %+v, want the resolved password", builds)
+	}
+
+	// Without Vault a reference is refused before cloning.
+	cl2 := &fakeCloner{sha: testSHA}
+	b2 := &Builder{Workspace: t.TempDir(), Engine: fake.New(), Cloner: cl2}
+	_, err := b2.Build(context.Background(), plan, false)
+	if err == nil || !strings.Contains(err.Error(), "git credentials: vault is not configured") {
+		t.Errorf("err = %v", err)
+	}
+	if cl2.calls != 0 {
+		t.Error("cloned without credentials")
+	}
+
+	// A plan without references never touches Vault.
+	b3 := &Builder{Workspace: t.TempDir(), Engine: fake.New(), Cloner: &fakeCloner{sha: testSHA}}
+	if _, err := b3.Build(context.Background(), testPlan(), false); err != nil {
+		t.Fatal(err)
 	}
 }

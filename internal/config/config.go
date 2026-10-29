@@ -16,6 +16,7 @@ type Config struct {
 	Registries     []Registry        `yaml:"registries"`
 	Runtimes       map[string]string `yaml:"runtimes"`
 	Log            LogConfig         `yaml:"log"`
+	Vault          VaultConfig       `yaml:"vault"`
 	Servers        []ServerSpec      `yaml:"servers"`
 }
 
@@ -31,6 +32,33 @@ type PodmanConfig struct {
 	Network     string        `yaml:"network"`
 	StopTimeout time.Duration `yaml:"stop_timeout"`
 }
+
+// VaultConfig says how to reach HashiCorp Vault (or OpenBao) for the
+// ${vault:PATH#KEY} references in the configuration. It is read at startup
+// only. Authentication is one of Token, TokenFile or AppRole.
+type VaultConfig struct {
+	Address       string        `yaml:"address"`
+	Namespace     string        `yaml:"namespace"`
+	CAFile        string        `yaml:"ca_file"`
+	TLSSkipVerify bool          `yaml:"tls_skip_verify"`
+	Token         string        `yaml:"token"`
+	TokenFile     string        `yaml:"token_file"`
+	AppRole       *VaultAppRole `yaml:"approle,omitempty"`
+	Timeout       time.Duration `yaml:"timeout"`
+}
+
+// VaultAppRole holds AppRole credentials: a role ID and a secret ID, each
+// given inline or as a file to read.
+type VaultAppRole struct {
+	RoleID       string `yaml:"role_id"`
+	RoleIDFile   string `yaml:"role_id_file"`
+	SecretID     string `yaml:"secret_id"`
+	SecretIDFile string `yaml:"secret_id_file"`
+}
+
+// Configured reports whether a Vault address is set, so ${vault:...}
+// references can be resolved.
+func (v VaultConfig) Configured() bool { return v.Address != "" }
 
 // Registry holds credentials for an image registry.
 type Registry struct {

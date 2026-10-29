@@ -3,6 +3,7 @@ package podman
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	nettypes "go.podman.io/common/libnetwork/types"
@@ -54,6 +55,16 @@ func toSpecGen(s runtime.ContainerSpec) *specgen.SpecGenerator {
 		switch m.Type {
 		case "volume":
 			g.Volumes = append(g.Volumes, &specgen.NamedVolume{Name: m.Source, Dest: m.Target, Options: opts})
+		case "tmpfs":
+			if m.Options != "" {
+				opts = append(opts, strings.Split(m.Options, ",")...)
+			}
+			g.Mounts = append(g.Mounts, spec.Mount{
+				Type:        "tmpfs",
+				Source:      "tmpfs",
+				Destination: m.Target,
+				Options:     opts,
+			})
 		default:
 			g.Mounts = append(g.Mounts, spec.Mount{
 				Type:        "bind",

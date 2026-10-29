@@ -25,7 +25,7 @@ Success looks like: Ken edits one YAML file or clicks through one form on the ho
 - Authentication or multi-user access control.
 - A unified `/mcp` endpoint aggregating all servers into one tool list (routed per-server endpoints only).
 - Forwarding server-to-client features through the proxy: sampling, elicitation, progress, logging, resource subscriptions. Only tools, resources, resource templates, prompts, and list-changed notifications are forwarded.
-- A secret store. Secrets are `${VAR}` references resolved from MCP Machine's own environment.
+- A secret store of its own. Secrets are `${VAR}` references resolved from MCP Machine's own environment, or, since the Vault integration (`2026-10-28-vault-secrets-design.md`), `${vault:PATH#KEY}` references read from HashiCorp Vault / OpenBao at start.
 - Kubernetes, Docker Desktop, or Windows.
 
 ## Anti-goals
@@ -208,7 +208,7 @@ Multi-stage Containerfile (`ubi9/go-toolset:1.26` → `ubi9/ubi-minimal:9.8`), `
 3. **Proxy core is the SDK**, not hand-rolled JSON-RPC forwarding, because of the era split in the protocol.
 4. **Routed endpoints only** (`/servers/{name}/...`), no aggregated endpoint.
 5. **Build caching by commit sha**; `ref: main` is re-resolved only on Rebuild.
-6. **Registry and git credentials** are config, not a secret store, and only ever via `${VAR}`.
+6. **Registry and git credentials** are config, not a secret store, and only ever via `${VAR}` or `${vault:PATH#KEY}` (see `2026-10-28-vault-secrets-design.md`).
 7. **htmx 2.0.10** rather than 4.0.0.
 
 ## Left to the builder

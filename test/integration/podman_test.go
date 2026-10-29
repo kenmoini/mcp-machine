@@ -4,6 +4,7 @@ package integration
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -11,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/kenmoini/mcp-machine/internal/manager"
 	"github.com/kenmoini/mcp-machine/internal/runtime"
 	"github.com/kenmoini/mcp-machine/internal/runtime/podman"
 )
@@ -182,6 +185,113 @@ func TestPodmanEngineEndToEnd(t *testing.T) {
 		}
 		if err := eng.RemoveContainer(ctx, id, true); err != nil {
 			t.Fatalf("RemoveContainer: %v", err)
+		}
+	})
+
+	t.Run("ImageConfig", func(t *testing.T) {
+		ctx := subCtx(t)
+		cfg, err := eng.ImageConfig(ctx, itAlpine)
+		if err != nil {
+			t.Fatalf("ImageConfig: %v", err)
+		}
+		if !slices.Equal(cfg.Cmd, []string{"/bin/sh"}) || len(cfg.Entrypoint) != 0 {
+			t.Errorf("alpine config = %+v, want Cmd [/bin/sh] and no entrypoint", cfg)
+		}
+		if _, err := eng.ImageConfig(ctx, "localhost/mcp-machine/does-not-exist:"+suffix); err == nil {
+			t.Error("unknown image: no error")
+		}
+	})
+
+	t.Run("SecretEnvDelivery", func(t *testing.T) {
+		ctx := subCtx(t)
+		img, err := eng.ImageConfig(ctx, itAlpine)
+		if err != nil {
+			t.Fatalf("ImageConfig: %v", err)
+		}
+		spec := runtime.ContainerSpec{
+			Name:    "mcpm-it-secret-" + suffix,
+			Image:   itAlpine,
+			Command: []string{"sh", "-c", `echo "TOKEN=$TOKEN"; if [ -e ` + manager.DeliveryPath + ` ]; then echo kept; else echo gone; fi; stat -c %a /run/mcp-machine; sleep 30`},
+			Stdin:   true,
+			Network: itNetwork,
+			Labels:  labels,
+			Mounts:  []runtime.Mount{manager.SecretMount()},
+		}
+		if err := manager.WrapEntrypoint(&spec, img); err != nil {
+			t.Fatalf("WrapEntrypoint: %v", err)
+		}
+		id, err := eng.CreateContainer(ctx, spec)
+		if err != nil {
+			t.Fatalf("CreateContainer: %v", err)
+		}
+		trackContainer(t, eng, id)
+		rwc, err := eng.Attach(ctx, id)
+		if err != nil {
+			t.Fatalf("Attach: %v", err)
+		}
+		defer func() { _ = rwc.Close() }()
+		if err := eng.StartContainer(ctx, id); err != nil {
+			t.Fatalf("StartContainer: %v", err)
+		}
+
+		const secret = "it-works-" + "s3cr3t"
+		file, err := manager.EnvFile(map[string]string{"TOKEN": secret})
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, err := eng.Exec(ctx, id, manager.DeliverCommand(), bytes.NewReader(file))
+		if err != nil || code != 0 {
+			t.Fatalf("deliver: code %d, err %v", code, err)
+		}
+
+		lines := make(chan string, 3)
+		go func() {
+			r := bufio.NewReader(rwc)
+			for i := 0; i < 3; i++ {
+				l, err := r.ReadString('\n')
+				if err != nil {
+					lines <- "ERR " + err.Error()
+					return
+				}
+				lines <- strings.TrimSpace(l)
+			}
+		}()
+		want := []string{"TOKEN=" + secret, "gone", "1777"}
+		for _, w := range want {
+			select {
+			case got := <-lines:
+				if got != w {
+					t.Fatalf("container printed %q, want %q", got, w)
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatalf("timed out waiting for %q from the container", w)
+			}
+		}
+
+		// Nothing of the secret is visible from outside the container.
+		env, entrypoint, cmd, err := eng.InspectConfig(ctx, id)
+		if err != nil {
+			t.Fatalf("InspectConfig: %v", err)
+		}
+		for _, e := range env {
+			if strings.Contains(e, secret) {
+				t.Errorf("inspect Env holds the secret: %q", e)
+			}
+		}
+		if len(entrypoint) == 0 || entrypoint[0] != "/bin/sh" {
+			t.Errorf("inspect Entrypoint = %q, want the sh wrapper", entrypoint)
+		}
+		if strings.Contains(strings.Join(entrypoint, " ")+strings.Join(cmd, " "), secret) {
+			t.Error("inspect Entrypoint/Cmd hold the secret")
+		}
+		code, err = eng.Exec(ctx, id, []string{"sh", "-c", "test ! -e " + manager.DeliveryPath}, nil)
+		if err != nil || code != 0 {
+			t.Errorf("env file still present: code %d, err %v", code, err)
+		}
+		// A non-zero exit is reported as such, not as an error.
+		code, err = eng.Exec(ctx, id, []string{"sh", "-c", "echo oops >&2; exit 3"}, nil)
+		if err != nil || code != 3 {
+			t.Errorf("exit 3: code %d, err %v", code, err)
 		}
 	})
 

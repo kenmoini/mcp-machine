@@ -113,7 +113,9 @@ func (s *Set) AdminFiles() []string {
 
 // Load reads every layer of l and merges them into one Config, expanding
 // ${VAR} references from the environment. MCP_MACHINE_PODMAN_SOCKET, when
-// set, overrides podman.socket.
+// set, overrides podman.socket; the Vault CLI's VAULT_ADDR, VAULT_TOKEN,
+// VAULT_NAMESPACE, VAULT_CACERT and VAULT_SKIP_VERIFY override the vault
+// section (see applyVaultEnv).
 func (l Layout) Load() (*Set, error) {
 	set, err := l.load(os.LookupEnv)
 	if err != nil {
@@ -127,7 +129,9 @@ func (l Layout) Load() (*Set, error) {
 
 // LoadRaw is Load without environment expansion: every ${NAME} reference is
 // kept as written and the socket override is not applied. It suits showing
-// or editing the configuration as the files hold it.
+// or editing the configuration as the files hold it. The Vault environment
+// overrides are applied, so a ${vault:...} reference that the environment
+// alone makes resolvable is accepted here too.
 func (l Layout) LoadRaw() (*Set, error) {
 	return l.load(func(name string) (string, bool) { return "${" + name + "}", true })
 }
@@ -197,6 +201,7 @@ func (l Layout) load(lookup func(string) (string, bool)) (*Set, error) {
 		return nil, err
 	}
 	cfg.Servers = servers
+	applyVaultEnv(cfg, os.LookupEnv)
 	where := func(server string) string {
 		return strings.TrimPrefix(origins[server].String(), "Defined in ")
 	}

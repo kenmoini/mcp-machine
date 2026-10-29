@@ -24,6 +24,7 @@ import (
 	"github.com/kenmoini/mcp-machine/internal/runtime"
 	"github.com/kenmoini/mcp-machine/internal/sources"
 	"github.com/kenmoini/mcp-machine/internal/store"
+	"github.com/kenmoini/mcp-machine/internal/vault"
 )
 
 // ErrUnknownServer is returned (wrapped with the name) for a server the
@@ -54,6 +55,9 @@ type Options struct {
 	EndpointFunc EndpointFunc  // default: DefaultEndpoint
 	Logger       *slog.Logger  // default: slog.Default()
 	Version      string        // facade server version; default "dev"
+	// Vault resolves ${vault:...} references. Nil means no Vault is
+	// configured: a server that references one fails to start.
+	Vault vault.Reader
 }
 
 // Manager owns one runner per configured server.
@@ -64,6 +68,7 @@ type Manager struct {
 	reg      *store.Registry
 	opts     Options
 	log      *slog.Logger
+	vault    vault.Reader // nil when not configured
 
 	// reconcileMu serializes Apply. It is held while Apply waits on runners;
 	// nothing else takes it, so commands (Start, Stop, ...) never wait for it.
@@ -116,6 +121,7 @@ func New(engine runtime.Engine, resolver sources.Resolver, builder Builder, reg 
 		reg:      reg,
 		opts:     opts,
 		log:      opts.Logger,
+		vault:    opts.Vault,
 		runners:  map[string]*runner{},
 	}
 }

@@ -88,9 +88,19 @@ func Resolve(cfg *config.Config, spec config.ServerSpec) (sources.Resolved, erro
 	var x expander
 
 	if spec.Command.Run != "" {
-		run, err := dockerrun.Parse(spec.Command.Run)
+		// ${vault:...} references are masked as plain ${NAME} placeholders
+		// so the run-line parser carries them through, then restored in
+		// the -e values, the only place they are allowed.
+		masked, refs := config.MaskVaultRefs(spec.Command.Run)
+		run, err := dockerrun.Parse(masked)
 		if err != nil {
 			return sources.Resolved{}, fmt.Errorf("parse run line: %w", err)
+		}
+		for k, v := range run.Env {
+			run.Env[k] = config.UnmaskVaultRefs(v, refs)
+		}
+		if err := refuseVaultRefs(run, refs); err != nil {
+			return sources.Resolved{}, err
 		}
 		image = run.Image
 		cs.Command = x.expandAll(run.Args)
@@ -138,6 +148,11 @@ func Resolve(cfg *config.Config, spec config.ServerSpec) (sources.Resolved, erro
 			return sources.Resolved{}, fmt.Errorf("unknown command %q; add it to runtimes", name)
 		}
 		image = cfg.Runtimes[name]
+		for _, a := range spec.Command.Args {
+			if config.HasVaultRef(a) {
+				return sources.Resolved{}, errors.New("${vault:...} is not allowed in command.args")
+			}
+		}
 		cs.Command = append([]string{name}, x.expandAll(spec.Command.Args)...)
 		if m, ok := cacheMount(name); ok {
 			cs.Mounts = append(cs.Mounts, m)
@@ -165,9 +180,7 @@ func Resolve(cfg *config.Config, spec config.ServerSpec) (sources.Resolved, erro
 			cs.Mounts = append(cs.Mounts, m)
 		}
 	}
-	if len(cs.Env) == 0 {
-		cs.Env = nil
-	}
+	SplitSecretEnv(cs)
 	cs.Image = image
 
 	return sources.Resolved{
@@ -176,6 +189,56 @@ func Resolve(cfg *config.Config, spec config.ServerSpec) (sources.Resolved, erro
 		Image:     sources.ImageSource{Ref: image, Auth: sources.RegistryAuthFor(cfg.Registries, image)},
 		Transport: "stdio",
 	}, nil
+}
+
+// SplitSecretEnv moves every Env value that holds a ${vault:...} reference
+// into SecretEnv, so the engine never sees it; the manager resolves and
+// delivers SecretEnv when the container starts. Empty maps become nil.
+func SplitSecretEnv(cs *runtime.ContainerSpec) {
+	for k, v := range cs.Env {
+		if config.HasVaultRef(v) {
+			if cs.SecretEnv == nil {
+				cs.SecretEnv = map[string]string{}
+			}
+			cs.SecretEnv[k] = v
+			delete(cs.Env, k)
+		}
+	}
+	if len(cs.Env) == 0 {
+		cs.Env = nil
+	}
+}
+
+// refuseVaultRefs reports a masked ${vault:...} reference that landed
+// anywhere in the parsed run line but its -e values, where it was restored
+// already: in the image, its arguments, a volume, a port or the workdir.
+func refuseVaultRefs(run dockerrun.Spec, refs []config.Ref) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	masks := config.VaultMasks(refs)
+	holds := func(s string) bool {
+		for _, m := range masks {
+			if strings.Contains(s, m) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case holds(run.Image):
+		return errors.New("${vault:...} is not allowed in the run line's image")
+	case holds(strings.Join(run.Args, " ")):
+		return errors.New("${vault:...} is not allowed in the run line's arguments")
+	case holds(strings.Join(run.Volumes, " ")), holds(strings.Join(run.Ports, " ")), holds(run.WorkDir), holds(strings.Join(run.PassEnv, " ")):
+		return errors.New("${vault:...} is only allowed in the run line's -e values")
+	}
+	for _, m := range run.Mounts {
+		if holds(m.Source) || holds(m.Target) {
+			return errors.New("${vault:...} is only allowed in the run line's -e values")
+		}
+	}
+	return nil
 }
 
 // cacheMount returns the package-cache volume for a runtime command.

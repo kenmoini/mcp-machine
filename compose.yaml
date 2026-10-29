@@ -26,8 +26,12 @@ services:
       - label=disable
     restart: unless-stopped
     # Secrets are referenced from the config files as ${VAR} and resolved from this
-    # container's environment. Uncomment and set what your config uses.
+    # container's environment, or as ${vault:PATH#KEY} and read from HashiCorp
+    # Vault / OpenBao (see docs/config.md, "Secrets from Vault"). Uncomment and
+    # set what your config uses.
     # environment:
     #   GHCR_USER: ${GHCR_USER}
     #   GHCR_TOKEN: ${GHCR_TOKEN}
     #   GITHUB_TOKEN: ${GITHUB_TOKEN}
+    #   VAULT_ADDR: https://vault.lan:8200     # or vault.address in config.yaml
+    #   VAULT_TOKEN: ${VAULT_TOKEN}            # or vault.token_file / vault.approle

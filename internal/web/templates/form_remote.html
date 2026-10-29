@@ -19,7 +19,7 @@
   </div>
   <div class="field">
     <label for="f-remote-headers">Headers</label>
-    <textarea id="f-remote-headers" name="remote.headers" rows="3" spellcheck="false" placeholder="Authorization: Bearer ${TOKEN}">{{.V "remote.headers"}}</textarea>
+    <textarea id="f-remote-headers" name="remote.headers" rows="3" spellcheck="false" placeholder="Authorization: Bearer ${TOKEN} or ${vault:kv/data/api#token}">{{.V "remote.headers"}}</textarea>
     <small class="muted">One "Key: Value" per line.</small>
   </div>
 </fieldset>

@@ -25,6 +25,7 @@ import (
 	"github.com/kenmoini/mcp-machine/internal/sources/build"
 	"github.com/kenmoini/mcp-machine/internal/sources/resolver"
 	"github.com/kenmoini/mcp-machine/internal/store"
+	"github.com/kenmoini/mcp-machine/internal/vault"
 	"github.com/kenmoini/mcp-machine/internal/web"
 )
 
@@ -91,18 +92,27 @@ func newManager(ctx context.Context, l config.Layout, set *config.Set, engine ru
 	cfg := set.Config
 	inContainer, selfID := detectSelf(ctx, engine, logger)
 	reg := store.NewRegistry()
+	vc, err := newVaultClient(ctx, cfg.Vault, logger)
+	if err != nil {
+		return serveDeps{}, err
+	}
 	builder := &build.Builder{
 		Workspace:  cfg.WorkspaceDir,
 		Engine:     engine,
 		Cloner:     build.GoGitCloner{},
 		Registries: cfg.Registries,
 	}
-	mgr := manager.New(engine, resolver.New(), builder, reg, manager.Options{
+	mopts := manager.Options{
 		InContainer: inContainer,
 		SelfID:      selfID,
 		Logger:      logger,
 		Version:     buildinfo.Version,
-	})
+	}
+	if vc != nil { // never a typed nil in the interfaces
+		builder.Secrets = vc
+		mopts.Vault = vc
+	}
+	mgr := manager.New(engine, resolver.New(), builder, reg, mopts)
 	state := &configState{layout: l, set: set}
 	logLoaded(logger, l, set)
 
@@ -148,6 +158,9 @@ func newManager(ctx context.Context, l config.Layout, set *config.Set, engine ru
 		if err := mgr.Close(shutCtx); err != nil {
 			logger.Error("close manager", "err", err)
 		}
+		if vc != nil {
+			vc.Close()
+		}
 	}
 
 	return serveDeps{
@@ -181,6 +194,27 @@ func newManager(ctx context.Context, l config.Layout, set *config.Set, engine ru
 		reg:   reg,
 		state: state,
 	}, nil
+}
+
+// newVaultClient builds and starts the Vault client when the configuration
+// has a vault section, else returns nil. The vault section is read at
+// startup only, like podman.socket. A client that cannot be built (a
+// missing credential file, say) is an error; one whose first
+// authentication fails is kept, with a warning: the servers that need it
+// fail on their own and retry, and a token renewal or re-login happens in
+// the background.
+func newVaultClient(ctx context.Context, vcfg config.VaultConfig, logger *slog.Logger) (*vault.Client, error) {
+	if !vcfg.Configured() {
+		return nil, nil
+	}
+	vc, err := vault.New(vault.FromConfig(vcfg), logger)
+	if err != nil {
+		return nil, err
+	}
+	if err := vc.Start(ctx); err != nil {
+		logger.Warn("vault: authentication failed; servers that reference secrets will fail until it succeeds", "address", vcfg.Address, "err", err)
+	}
+	return vc, nil
 }
 
 // logLoaded logs, at info, what the operator should know about a set just

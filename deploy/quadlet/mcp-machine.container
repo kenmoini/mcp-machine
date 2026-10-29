@@ -22,6 +22,12 @@
 #                     <name>.yaml, one file per server. It must exist.
 # Secrets referenced as ${VAR} in the config files can be supplied with
 # EnvironmentFile=/etc/mcp-machine.env or Environment=NAME=value lines.
+# Secrets referenced as ${vault:PATH#KEY} are read from HashiCorp Vault /
+# OpenBao (docs/config.md, "Secrets from Vault"): set vault.address in
+# config.yaml or Environment=VAULT_ADDR=https://vault.lan:8200, and give MCP
+# Machine one credential: Environment=VAULT_TOKEN=... (or put it in the
+# EnvironmentFile), a token_file, or an approle whose secret_id_file is
+# mounted under /etc/mcp-machine.
 [Unit]
 Description=MCP Machine
 After=network-online.target

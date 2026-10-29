@@ -75,9 +75,7 @@ func Resolve(cfg *config.Config, spec config.ServerSpec) (sources.Resolved, erro
 			cs.Mounts = append(cs.Mounts, m)
 		}
 	}
-	if len(cs.Env) == 0 {
-		cs.Env = nil
-	}
+	command.SplitSecretEnv(cs)
 
 	res.Image = sources.ImageSource{Build: &sources.BuildPlan{
 		Name:          spec.Name,

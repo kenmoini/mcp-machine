@@ -99,6 +99,22 @@ A stdio container is created with stdin open, attached before it starts (so
 early output is not lost), and talked to over the attach stream. Container
 stdout/stderr logs are what the UI shows on the server page.
 
+A server whose environment references Vault secrets (`${vault:PATH#KEY}`)
+gets them without the values ever entering the create spec, which Podman
+persists on disk. The resolvers leave such variables in
+`ContainerSpec.SecretEnv`, which no engine accepts; the manager
+(`secretenv.go`) reads the values from Vault (`internal/vault`, a small
+client over the HTTP API), adds a tmpfs at `/run/mcp-machine` and a `/bin/sh`
+wrapper entrypoint that waits for `/run/mcp-machine/env`, sources it,
+deletes it and execs the image's own entrypoint and command, creates and
+starts the container, then streams `NAME='value'` lines into that file over
+`podman exec` with stdin attached. For stdio the order is attach, start,
+deliver, dial (the MCP handshake waits until the wrapper execs the server);
+for http it is start, deliver, probe. The same delivery runs when a stopped
+container is resumed or adopted after a restart, since its tmpfs is empty
+again. Headers of a `remote` server, registry credentials and the git token
+are resolved in memory at the moment of use.
+
 ## Server sources
 
 - `remote`: no container. MCP Machine connects to the URL with a Streamable
@@ -138,7 +154,9 @@ to validate, keeps the last good configuration and records the error, which
 the Config page shows. File-level problems (read, parse, empty file, a global
 key in a drop-in, a duplicate name in one file, an admin `type` mismatch)
 name the file; validation problems name the server and an unset `${VAR}` the
-variable, since they are found on the merged set. Each successful reload is handed to the manager, which reconciles
+variable, since they are found on the merged set. `${vault:...}` references
+are checked for shape and placement at load and kept verbatim, so the loaded
+configuration and the spec hash hold the reference, never the value. Each successful reload is handed to the manager, which reconciles
 by name and spec hash. The UI reloads right after writing so the change is
 applied before the browser is redirected; see [config.md](config.md).
 

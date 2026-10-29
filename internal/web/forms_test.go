@@ -830,3 +830,47 @@ func TestImportReloadsOnce(t *testing.T) {
 		t.Errorf("added %d, reloads %d", len(e.wr.Added), e.cfg.reloads)
 	}
 }
+
+func TestFormVaultReferences(t *testing.T) {
+	// Vault configured in the file: references are accepted in env and
+	// headers, refused in args and when malformed.
+	e := newEnv(t)
+	e.cfg.cfg.Vault = config.VaultConfig{Address: "https://vault.example:8200", Token: "t"}
+	f := remoteForm()
+	f.Set("remote.headers", "Authorization: Bearer ${vault:kv/data/gh#token}")
+	f.Set("env", "A=${vault:kv/data/gh#token}")
+	rec := e.post("/servers/new", f)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(e.wr.Added) != 1 || e.wr.Added[0].Remote.Headers["Authorization"] != "Bearer ${vault:kv/data/gh#token}" {
+		t.Errorf("written spec = %+v, want the reference kept verbatim", e.wr.Added)
+	}
+
+	rec = e.post("/servers/alpha/edit", url.Values{"command.command": {"npx"}, "command.args": {"--token\n${vault:kv/data/gh#token}"}, "enabled": {"1"}})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("args: status %d", rec.Code)
+	}
+	mustContain(t, rec.Body.String(), `server &#34;alpha&#34;: ${vault:...} is not allowed in command.args`)
+
+	f = remoteForm()
+	f.Set("env", "A=${vault:kv/data/gh}")
+	rec = e.post("/servers/new", f)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("malformed: status %d", rec.Code)
+	}
+	mustContain(t, rec.Body.String(), `invalid reference &#34;${vault:kv/data/gh}&#34;`)
+
+	// No Vault configured: a reference is refused with a clear message.
+	e2 := newEnv(t)
+	f = remoteForm()
+	f.Set("env", "A=${vault:kv/data/gh#token}")
+	rec = e2.post("/servers/new", f)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("no vault: status %d", rec.Code)
+	}
+	mustContain(t, rec.Body.String(), "vault is not configured (no vault.address)")
+	if len(e2.wr.Added) != 0 {
+		t.Errorf("written anyway: %+v", e2.wr.Added)
+	}
+}
