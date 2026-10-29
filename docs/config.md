@@ -79,6 +79,8 @@ non-empty: `VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_NAMESPACE`, `VAULT_CACERT`, and
 section at all: `-e VAULT_ADDR=... -e VAULT_TOKEN=...` on the MCP Machine
 container is enough.
 
+> For more information on the Vault integration, read [secrets-from-vault.md](./secrets-from-vault.md)
+
 ### runtimes
 
 Maps a `command.command` value to the image that runs it. The defaults are
@@ -256,101 +258,7 @@ references a variable MCP Machine's environment does not set is refused with
 field that cannot take it, or without a `vault.address`, with the loader's
 message, so the UI never writes a file the next start would reject.
 
-## Secrets from Vault
-
-With a `vault` section (or `VAULT_ADDR` and `VAULT_TOKEN`), a value may name a
-key of a Vault secret instead of an environment variable:
-
-```yaml
-vault:
-  address: https://vault.lan:8200
-  approle:
-    role_id: 7a1c...                       # or role_id_file
-    secret_id_file: /etc/mcp-machine/vault-secret-id
-
-servers:
-  - name: github
-    type: command
-    command:
-      command: npx
-      args: ["-y", "@modelcontextprotocol/server-github"]
-    env:
-      GITHUB_PERSONAL_ACCESS_TOKEN: "${vault:kv/data/github#token}"
-  - name: copilot
-    type: remote
-    remote:
-      url: https://api.githubcopilot.com/mcp/
-      headers: { Authorization: "Bearer ${vault:kv/data/github#token}" }
-```
-
-`PATH` is the secret's API path under `/v1/`: for a KV **version 2** mount it
-includes `data/` (`kv/data/github` for `vault kv get kv/github`); for a KV
-version 1 mount it does not (`kv/github`). Any other secret engine whose read
-returns a data object works the same way. `KEY` is a key of that data, and its
-value must be a string. The reference can sit inside a longer value
-(`"Bearer ${vault:...}"`) and next to `${VAR}` references. The same reference
-in several fields of a server reads the secret once per start.
-
-MCP Machine needs a token that can read the referenced paths and nothing
-more. A policy for the example above:
-
-```hcl
-path "kv/data/github" { capabilities = ["read"] }
-```
-
-Give it a token (`vault token create -policy=mcp-machine -orphan -period=24h`
-and `VAULT_TOKEN` or `token_file`), or an AppRole with that policy. The token
-is checked at startup (`lookup-self`; the log line shows its policies and TTL)
-and renewed in the background at two thirds of its TTL; with an AppRole, MCP
-Machine logs in again when a renewal fails. A Vault that is down at startup
-only delays the servers that reference it: they fail with the Vault error and
-retry with the usual backoff.
-
-**How a secret reaches a container.** The reference text, never the value,
-is in the loaded configuration, in the container's create spec, and in the
-spec hash. When a container server with references starts, MCP Machine reads
-the secrets, creates the container with a small tmpfs at `/run/mcp-machine`
-and a `/bin/sh` wrapper as entrypoint (`podman inspect` shows the wrapper as
-`Entrypoint` and the image's own entrypoint and command as `Cmd`), starts it,
-and streams `NAME='value'` lines into `/run/mcp-machine/env` over `podman
-exec`. The wrapper waits for that file (up to 60 seconds), sources it,
-deletes it, and `exec`s the image's own command with the variables in its
-environment. Nothing is written to disk and nothing shows in `podman
-inspect`. Servers without references are created exactly as before, with no
-wrapper and no tmpfs. The image must have `/bin/sh` (the stock `node`, `uv`,
-and `python` images do); an image without it exits at once with `exec
-/bin/sh: no such file or directory`, which the server page shows.
-
-Values for MCP Machine's own use (`remote.headers`, registry credentials,
-`build.auth.token`) are resolved in memory at the moment of use: when the
-remote server is dialled, the image is pulled, or the repository is cloned.
-
-**Rotation.** A changed secret does not change the spec hash, so the
-container is not recreated. Restart the server (or Stop and Start it) to
-read the new value: every start, including the one after an MCP Machine
-restart, delivers the secrets again. A `remote` server reads its headers
-again on every connect.
-
-`mcp-machine validate --vault` reads every referenced key and reports the
-ones that fail (`server "github": ${vault:kv/data/github#token}: vault: read
-kv/data/github: 403 permission denied`), so a policy mistake is found before
-a server fails.
-
-What this does and does not protect: the secret is never in a file MCP
-Machine writes, never in Podman's on-disk container configuration or
-`podman inspect`, never in a container label, and never in MCP Machine's
-environment. It is in the server process's environment (that is the point),
-readable by anything running in that container and by root on the host, and
-briefly in MCP Machine's memory during delivery. MCP Machine's Vault token
-can read every path its policy allows, and the UI has no authentication, so
-anyone who can reach the UI can define a server that prints any of those
-paths: keep the policy to the exact paths the servers need. See
-[SECURITY.md](../SECURITY.md).
-
-Containers created by a version without Vault support from a file that
-already held a literal `${vault:...}` keep their hash and are adopted on
-upgrade, but have no wrapper; their first delivery fails and the retry
-recreates them.
+> For more information on the Vault integration, read [secrets-from-vault.md](./secrets-from-vault.md)
 
 ## Configuration layers
 
