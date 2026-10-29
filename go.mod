@@ -7,7 +7,7 @@ toolchain go1.27.3
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-git/go-git/v5 v5.19.3
-	github.com/moby/moby/api v1.55.0
+	github.com/moby/moby/api v1.56.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/opencontainers/runtime-spec v1.3.0
 	go.podman.io/buildah v1.45.2
