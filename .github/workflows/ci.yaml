@@ -6,6 +6,13 @@ on:
     branches:
       - main
 
+  # Schedule workflow run at 00:00 on Sunday
+  schedule:
+    - cron: '0 2 * * 0'
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
 # One run per ref; a newer push cancels the run it supersedes.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}

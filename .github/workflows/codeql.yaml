@@ -11,6 +11,9 @@ on:
     # Weekly, Monday 03:17 UTC.
     - cron: '17 3 * * 1'
 
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
 concurrency:
   group: codeql-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
