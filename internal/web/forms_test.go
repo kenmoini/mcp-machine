@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kenmoini/mcp-machine/internal/catalog"
 	"github.com/kenmoini/mcp-machine/internal/config"
 	"github.com/kenmoini/mcp-machine/internal/store"
 	"github.com/kenmoini/mcp-machine/internal/web"
@@ -872,5 +873,121 @@ func TestFormVaultReferences(t *testing.T) {
 	mustContain(t, rec.Body.String(), "vault is not configured (no vault.address)")
 	if len(e2.wr.Added) != 0 {
 		t.Errorf("written anyway: %+v", e2.wr.Added)
+	}
+}
+
+// catalogEntries builds n catalog entries named cat-00.. of the given type.
+func catalogEntries(n int) []catalog.Entry {
+	out := make([]catalog.Entry, 0, n)
+	for i := range n {
+		name := fmt.Sprintf("cat-%02d", i)
+		out = append(out, catalog.Entry{
+			Name: name, Type: "remote", Category: "development", File: name + ".yaml",
+			Description: "Entry " + name + ".", Upstream: "https://example.com/" + name,
+			Spec: config.ServerSpec{Name: name, Type: "remote", Remote: &config.RemoteSpec{URL: "https://" + name + ".example/mcp"}},
+		})
+	}
+	return out
+}
+
+func githubEntry() catalog.Entry {
+	return catalog.Entry{
+		Name: "github", Type: "command", Category: "development", File: "github.yaml",
+		Description: "GitHub's official MCP server, run locally from its image.",
+		Upstream:    "https://github.com/github/github-mcp-server",
+		Secret:      "vault kv put kv/mcp-machine/github token=ghp_...",
+		Spec: config.ServerSpec{Name: "github", Type: "command", Command: &config.CommandSpec{
+			Run: "docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server",
+			Env: map[string]string{"GITHUB_PERSONAL_ACCESS_TOKEN": "${vault:kv/data/mcp-machine/github#token}"},
+		}},
+	}
+}
+
+func TestPickPageWithoutCatalog(t *testing.T) {
+	e := newEnv(t)
+	rec := e.get("/servers/new")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	mustContain(t, body, "Add a server", "/servers/new?type=remote")
+	if strings.Contains(body, "Catalog") || strings.Contains(body, "pager") {
+		t.Error("a catalog section was rendered without a catalog")
+	}
+}
+
+func TestPickPageCatalogPager(t *testing.T) {
+	e := newEnv(t)
+	e.catalog = catalogEntries(8)
+	rec := e.get("/servers/new")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	mustContain(t, body, `id="catalog-heading"`, "Page 1 of 2 (8 servers)", `href="/servers/new?page=2"`,
+		`href="/servers/new?type=remote&amp;catalog=cat-00"`, "Entry cat-05.", `<span class="tag">development</span>`)
+	if strings.Contains(body, "cat-06") {
+		t.Error("page 1 shows an entry of page 2")
+	}
+	if strings.Contains(body, `href="/servers/new?page=0"`) {
+		t.Error("page 1 links to a previous page")
+	}
+
+	rec = e.get("/servers/new?page=2")
+	body = rec.Body.String()
+	mustContain(t, body, "Page 2 of 2", `href="/servers/new?page=1"`, "cat-06", "cat-07")
+	if strings.Contains(body, "cat-05.") || strings.Contains(body, `href="/servers/new?page=3"`) {
+		t.Error("page 2 shows page 1 entries or a next link")
+	}
+
+	// Out of range pages clamp.
+	if body := e.get("/servers/new?page=9").Body.String(); !strings.Contains(body, "Page 2 of 2") {
+		t.Error("page 9 did not clamp to the last page")
+	}
+	if body := e.get("/servers/new?page=-3").Body.String(); !strings.Contains(body, "Page 1 of 2") {
+		t.Error("page -3 did not clamp to the first page")
+	}
+
+	// A card for an entry with a Vault secret says so.
+	e.catalog = []catalog.Entry{githubEntry()}
+	body = e.get("/servers/new").Body.String()
+	mustContain(t, body, "Needs a Vault secret", "vault kv put kv/mcp-machine/github token=ghp_...", "Page 1 of 1 (1 servers)")
+}
+
+func TestNewFormPrefilledFromCatalog(t *testing.T) {
+	e := newEnv(t)
+	e.catalog = []catalog.Entry{githubEntry()}
+	rec := e.get("/servers/new?type=command&catalog=github")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	mustContain(t, body,
+		`name="name" value="github"`,
+		"docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server",
+		"GITHUB_PERSONAL_ACCESS_TOKEN=${vault:kv/data/mcp-machine/github#token}",
+		`<div class="info banner">From the catalog: GitHub&#39;s official MCP server, run locally from its image. Check the host paths`,
+		// No Vault in the test config: the heads-up is shown.
+		"no vault.address is configured")
+	if !strings.Contains(body, `value="1" checked`) {
+		t.Error("enabled is not checked")
+	}
+
+	// With Vault configured the heads-up goes away.
+	e.cfg.cfg.Vault = config.VaultConfig{Address: "https://vault.example:8200", Token: "t"}
+	if body := e.get("/servers/new?type=command&catalog=github").Body.String(); strings.Contains(body, "no vault.address") {
+		t.Error("the Vault heads-up is shown although vault.address is set")
+	}
+
+	// Unknown entry, and an entry opened under the wrong type.
+	if rec := e.get("/servers/new?type=command&catalog=nope"); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown entry: status %d", rec.Code)
+	}
+	if rec := e.get("/servers/new?type=remote&catalog=github"); rec.Code != http.StatusBadRequest {
+		t.Errorf("wrong type: status %d", rec.Code)
+	}
+	// The plain form is unaffected.
+	if body := e.get("/servers/new?type=command").Body.String(); strings.Contains(body, "info banner") {
+		t.Error("the plain form shows a catalog notice")
 	}
 }

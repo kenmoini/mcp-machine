@@ -1,5 +1,6 @@
 # The reference fetch server: retrieves a URL and converts it to markdown.
 # https://github.com/modelcontextprotocol/servers/tree/main/src/fetch
+# category: development
 servers:
   - name: fetch
     type: command

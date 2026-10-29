@@ -1,6 +1,7 @@
 # GitHub's official MCP server, run locally from its image.
 # https://github.com/github/github-mcp-server
 # Secret: vault kv put kv/mcp-machine/github token=ghp_...   (a fine-grained PAT scoped to the repositories you need)
+# category: development
 servers:
   - name: github
     type: command

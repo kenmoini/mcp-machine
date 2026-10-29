@@ -1,6 +1,7 @@
 # Postgres MCP Pro in restricted mode: read-only SQL, schema and index advice.
 # https://github.com/crystaldba/postgres-mcp
 # Secret: vault kv put kv/mcp-machine/postgres uri=postgresql://user:pass@db.lan:5432/app
+# category: development
 servers:
   - name: postgres
     type: command

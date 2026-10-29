@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/kenmoini/mcp-machine/internal/adapters/httpadapter"
+	"github.com/kenmoini/mcp-machine/internal/catalog"
 	"github.com/kenmoini/mcp-machine/internal/config"
 	"github.com/kenmoini/mcp-machine/internal/proxy"
 	"github.com/kenmoini/mcp-machine/internal/runtime"
@@ -88,6 +89,9 @@ type Deps struct {
 	// LookupEnv resolves the ${VAR} references of an edited spec, which must
 	// all be set for the written file to load. Nil means os.LookupEnv.
 	LookupEnv func(string) (string, bool)
+	// Catalog returns the ready-made servers the Add server page offers as
+	// cards, read afresh on each call. Nil means no catalog.
+	Catalog func() []catalog.Entry
 }
 
 const (

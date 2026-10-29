@@ -1,3 +1,4 @@
+{{if .Notice}}<div class="info banner">{{.Notice}}</div>{{end}}
 {{if .Errors}}<div class="err banner" role="alert"><ul>{{range .Errors}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
 <input type="hidden" name="type" value="{{.Type}}">
 <div class="field">

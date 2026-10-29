@@ -17,6 +17,7 @@ import (
 
 	"github.com/kenmoini/mcp-machine/internal/adapters/httpadapter"
 	"github.com/kenmoini/mcp-machine/internal/buildinfo"
+	"github.com/kenmoini/mcp-machine/internal/catalog"
 	"github.com/kenmoini/mcp-machine/internal/config"
 	"github.com/kenmoini/mcp-machine/internal/manager"
 	"github.com/kenmoini/mcp-machine/internal/ops"
@@ -33,6 +34,10 @@ const (
 	readHeaderTimeout = 10 * time.Second
 	shutdownTimeout   = 15 * time.Second
 )
+
+// defaultCatalogDir is where the image puts the catalog drop-ins shown on
+// the Add server page.
+const defaultCatalogDir = "/usr/share/mcp-machine/catalog"
 
 // serveDeps is what serve receives from newManager: the parts the HTTP layer
 // mounts, plus the manager, registry and config state the web layer uses.
@@ -196,6 +201,20 @@ func newManager(ctx context.Context, l config.Layout, set *config.Set, engine ru
 	}, nil
 }
 
+// catalogSource returns the Add server page's catalog reader for dir, read
+// afresh on every page view so a bind-mounted catalog can change without a
+// restart; nil when dir is "". A directory that does not exist at startup is
+// noted once at info and simply yields no cards.
+func catalogSource(dir string, logger *slog.Logger) func() []catalog.Entry {
+	if dir == "" {
+		return nil
+	}
+	if _, err := os.Stat(dir); err != nil {
+		logger.Info("catalog directory not found; the Add server page shows no catalog", "dir", dir, "err", err)
+	}
+	return func() []catalog.Entry { return catalog.Load(dir, logger) }
+}
+
 // newVaultClient builds and starts the Vault client when the configuration
 // has a vault section, else returns nil. The vault section is read at
 // startup only, like podman.socket. A client that cannot be built (a
@@ -348,6 +367,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts
 	fs.SetOutput(stderr)
 	cf := addConfigFlags(fs)
 	listen := fs.String("listen", "", "listen address, overriding the configuration")
+	catalogDir := fs.String("catalog", defaultCatalogDir, `directory of catalog drop-ins shown on the Add server page ("" for none)`)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -380,6 +400,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts
 	} else if l.UserDir != "" {
 		writer = config.DirWriter{Dir: l.UserDir, Layout: l}
 	}
+	catalogFn := catalogSource(*catalogDir, logger)
 
 	// TLS and the listener come first: if either fails, nothing has been
 	// started (no engine connection, no containers).
@@ -443,6 +464,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, opts
 		AllowedOrigins: cfg.AllowedOrigins,
 		Version:        buildinfo.Version,
 		Logger:         logger,
+		Catalog:        catalogFn,
 	}))
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: readHeaderTimeout, TLSConfig: tlsConfig}

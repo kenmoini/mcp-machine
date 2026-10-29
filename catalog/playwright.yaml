@@ -2,6 +2,7 @@
 # no browsers). Headless Chromium; one browser is shared by every consumer, so
 # give each team its own copy of this entry under another name if that matters.
 # https://github.com/microsoft/playwright-mcp
+# category: development
 servers:
   - name: playwright
     type: command

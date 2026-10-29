@@ -1,6 +1,7 @@
 # The reference git server: log, diff, status, and commits on mounted repositories.
 # https://github.com/modelcontextprotocol/servers/tree/main/src/git
 # Mount read-write only if you want it to commit.
+# category: development
 servers:
   - name: git
     type: command

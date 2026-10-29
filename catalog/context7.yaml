@@ -2,6 +2,7 @@
 # https://github.com/upstash/context7
 # The API key is optional (higher rate limits); remove the header without one.
 # Secret: vault kv put kv/mcp-machine/context7 api_key=ctx7sk-...
+# category: development
 servers:
   - name: context7
     type: remote

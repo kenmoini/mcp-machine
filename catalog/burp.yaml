@@ -2,6 +2,7 @@
 # "MCP Server") and listens over SSE, by default on 127.0.0.1:9876. Bind it to
 # an address MCP Machine can reach and point the URL at it.
 # https://github.com/PortSwigger/mcp-server
+# category: security
 servers:
   - name: burp
     type: remote

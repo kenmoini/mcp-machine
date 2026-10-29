@@ -1,6 +1,7 @@
 # Grafana's official MCP server: dashboards, datasources, alerts, incidents.
 # https://github.com/grafana/mcp-grafana
 # Secret: vault kv put kv/mcp-machine/grafana token=glsa_...   (a service-account token with Viewer role)
+# category: development
 servers:
   - name: grafana
     type: command

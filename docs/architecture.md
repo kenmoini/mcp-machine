@@ -36,6 +36,7 @@ clients (Claude Code, Cursor, mcp-machine connect, mcp-remote)
 | `internal/proxy` | The facade: one `mcp.Server` per managed server that mirrors a backend session. |
 | `internal/adapters` | `httpadapter` mounts the Streamable HTTP and SSE routes with origin protection; `stdio` is the `connect` bridge. |
 | `internal/web` | Server-rendered UI (`html/template`, vendored htmx 2.0.10, no JavaScript build step). |
+| `internal/catalog` | Reads the ready-made server drop-ins (`catalog/`, shipped at `/usr/share/mcp-machine/catalog`) and their comment headers for the Add server page's Catalog cards. |
 | `internal/ops` | `/healthz`, `/readyz`, `/metrics`. |
 
 ## The proxy facade

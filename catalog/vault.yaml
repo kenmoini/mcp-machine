@@ -4,6 +4,7 @@
 # has no authentication: give it a token scoped to exactly what the consumers
 # may touch, and treat this entry as administrator-only.
 # Secret: vault kv put kv/mcp-machine/vault-mcp token=hvs....
+# category: security
 servers:
   - name: vault
     type: command

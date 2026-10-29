@@ -74,3 +74,33 @@ func TestNewVaultClient(t *testing.T) {
 		t.Errorf("missing token file: %v", err)
 	}
 }
+
+func TestCatalogSource(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	if fn := catalogSource("", logger); fn != nil {
+		t.Error(`"" should disable the catalog`)
+	}
+	missing := filepath.Join(t.TempDir(), "nope")
+	fn := catalogSource(missing, logger)
+	if fn == nil {
+		t.Fatal("missing directory returned no source")
+	}
+	if got := fn(); got != nil {
+		t.Errorf("missing directory yields entries: %v", got)
+	}
+	if !strings.Contains(logs.String(), "catalog directory not found") {
+		t.Errorf("missing directory not logged: %s", logs.String())
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "fetch.yaml"), []byte("# Fetch.\n# category: development\nservers:\n  - {name: fetch, type: command, command: {command: uvx}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := catalogSource(dir, logger)()
+	if len(got) != 1 || got[0].Name != "fetch" || got[0].Description != "Fetch." {
+		t.Errorf("entries = %+v", got)
+	}
+	if defaultCatalogDir != "/usr/share/mcp-machine/catalog" {
+		t.Errorf("defaultCatalogDir = %q", defaultCatalogDir)
+	}
+}

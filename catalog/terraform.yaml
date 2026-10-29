@@ -1,5 +1,6 @@
 # HashiCorp's Terraform MCP server: registry providers, modules, and policies.
 # https://github.com/hashicorp/terraform-mcp-server
+# category: development
 servers:
   - name: terraform
     type: command

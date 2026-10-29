@@ -88,7 +88,7 @@ fmt-check:
 	if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 run: build
-	./bin/mcp-machine serve -c $(CONFIG) --config-d $(CONFIG_D)
+	./bin/mcp-machine serve -c $(CONFIG) --config-d $(CONFIG_D) --catalog ./catalog
 
 validate: build
 	./bin/mcp-machine validate -c $(CONFIG) --config-d $(CONFIG_D)

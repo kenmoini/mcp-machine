@@ -20,6 +20,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/kenmoini/mcp-machine/internal/catalog"
 	"github.com/kenmoini/mcp-machine/internal/config"
 	"github.com/kenmoini/mcp-machine/internal/proxy"
 	"github.com/kenmoini/mcp-machine/internal/runtime"
@@ -125,7 +126,13 @@ type env struct {
 	cfg *fakeConfig
 	reg *store.Registry
 	wr  *fakeWriter
+	// catalog is what the Add server page's Catalog section shows; nil
+	// means no catalog, as in a deployment without the directory.
+	catalog []catalog.Entry
 }
+
+// get performs a GET with the test host.
+func (e *env) get(target string) *httptest.ResponseRecorder { return e.do(http.MethodGet, target) }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
@@ -172,14 +179,16 @@ func newEnv(t *testing.T) *env {
 	// Both servers are UI-owned by default, so they can be deleted.
 	cfg.origins = map[string]config.Origin{"alpha": userOrigin("alpha"), "beta": userOrigin("beta")}
 	wr := &fakeWriter{}
-	h := web.New(web.Deps{
+	e := &env{mgr: mgr, cfg: cfg, reg: reg, wr: wr}
+	e.h = web.New(web.Deps{
 		Manager: mgr, Registry: reg, Config: cfg, Writer: wr,
 		PublicURL: "http://mcp.lan:8080", Version: "test",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		// Every variable is set except those named UNSET*.
 		LookupEnv: func(name string) (string, bool) { return "x", !strings.HasPrefix(name, "UNSET") },
+		Catalog:   func() []catalog.Entry { return e.catalog },
 	})
-	return &env{h: h, mgr: mgr, cfg: cfg, reg: reg, wr: wr}
+	return e
 }
 
 // The files of the test origins.

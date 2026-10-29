@@ -1,6 +1,8 @@
 # GitHub's hosted MCP server. No container: MCP Machine connects to it.
-# https://github.com/github/github-mcp-server (remote server section)
+# https://github.com/github/github-mcp-server
+# See the README's remote server section.
 # Secret: vault kv put kv/mcp-machine/github token=ghp_...
+# category: development
 servers:
   - name: github-remote
     type: remote

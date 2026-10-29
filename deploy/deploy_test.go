@@ -196,3 +196,17 @@ func TestDeployFilesMentionVault(t *testing.T) {
 		}
 	}
 }
+
+func TestContainerfileShipsCatalog(t *testing.T) {
+	cf := readRepoFile(t, "Containerfile")
+	if !strings.Contains(cf, "COPY catalog/*.yaml /usr/share/mcp-machine/catalog/") {
+		t.Error("Containerfile does not copy the catalog to /usr/share/mcp-machine/catalog/")
+	}
+	// The serve default must point where the image puts it.
+	if !strings.Contains(readRepoFile(t, "internal/cli/serve.go"), `defaultCatalogDir = "/usr/share/mcp-machine/catalog"`) {
+		t.Error("serve's default catalog directory differs from the image's")
+	}
+	if !strings.Contains(readRepoFile(t, "Makefile"), "--catalog ./catalog") {
+		t.Error("make run does not pass --catalog ./catalog")
+	}
+}

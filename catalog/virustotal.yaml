@@ -1,6 +1,7 @@
 # VirusTotal lookups for hashes, URLs, domains and IPs (read-only enrichment).
 # https://github.com/BurtTheCoder/mcp-virustotal
 # Secret: vault kv put kv/mcp-machine/virustotal api_key=...
+# category: security
 servers:
   - name: virustotal
     type: command

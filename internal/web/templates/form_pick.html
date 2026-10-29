@@ -6,4 +6,25 @@
   <a class="card" href="/servers/new?type=build"><h2>Build</h2><p class="muted">A server built from a git repository with a Containerfile.</p></a>
 </div>
 <p class="muted">Already have a client config or a docker run command? <a href="/servers/import">Import it</a>.</p>
+{{if .Pages}}
+<section class="catalog" aria-labelledby="catalog-heading">
+  <h2 id="catalog-heading">Catalog</h2>
+  <p class="muted">Ready-made servers. Pick one to open its form prefilled; adjust the paths and the secret, then save.</p>
+  <div class="picker cards">
+  {{range .Entries}}
+    <a class="card" href="/servers/new?type={{.Type}}&amp;catalog={{.Name}}">
+      <h3>{{.Name}}</h3>
+      <p class="tags">{{if .Category}}<span class="tag">{{.Category}}</span> {{end}}<span class="tag">{{.Type}}</span></p>
+      <p class="muted">{{.Description}}</p>
+      {{if .HasVaultRefs}}<small class="muted">Needs a Vault secret: <code>{{.Secret}}</code></small>{{end}}
+    </a>
+  {{end}}
+  </div>
+  <nav class="pager" aria-label="Catalog pages">
+    {{if .Prev}}<a href="/servers/new?page={{.Prev}}">&larr; Previous</a>{{else}}<span class="muted">&larr; Previous</span>{{end}}
+    <span>Page {{.Page}} of {{.Pages}} ({{.Total}} servers)</span>
+    {{if .Next}}<a href="/servers/new?page={{.Next}}">Next &rarr;</a>{{else}}<span class="muted">Next &rarr;</span>{{end}}
+  </nav>
+</section>
+{{end}}
 {{end}}

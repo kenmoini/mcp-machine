@@ -1,5 +1,6 @@
 # The reference sequential-thinking server: structured, revisable reasoning steps.
 # https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking
+# category: development
 servers:
   - name: sequential-thinking
     type: command

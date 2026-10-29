@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kenmoini/mcp-machine/internal/catalog"
 	"github.com/kenmoini/mcp-machine/internal/config"
 	"github.com/kenmoini/mcp-machine/internal/sources/resolver"
 )
@@ -59,6 +60,24 @@ func TestCatalogLoadsValidatesAndResolves(t *testing.T) {
 		}
 		if !strings.HasPrefix(strings.TrimLeft(string(b), "\n"), "#") {
 			t.Errorf("%s has no leading comment saying what it is", f)
+		}
+	}
+
+	// The UI reads the same files through the catalog package: every one
+	// must load, with a description and a category, so the cards are complete.
+	entries := catalog.Load(".", nil)
+	if len(entries) != len(files) {
+		t.Errorf("catalog.Load = %d entries, want %d (one per file)", len(entries), len(files))
+	}
+	for _, e := range entries {
+		if e.Description == "" || e.Upstream == "" {
+			t.Errorf("%s: description %q, upstream %q: both are needed for its card", e.File, e.Description, e.Upstream)
+		}
+		if e.Category != "development" && e.Category != "security" {
+			t.Errorf("%s: category %q, want development or security", e.File, e.Category)
+		}
+		if e.HasVaultRefs() && e.Secret == "" {
+			t.Errorf("%s references Vault but has no \"# Secret:\" line", e.File)
 		}
 	}
 }

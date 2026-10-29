@@ -4,6 +4,7 @@
 # The token is optional (Semgrep AppSec Platform rules); remove the -e and the
 # env entry to run with the open-source rules only.
 # Secret: vault kv put kv/mcp-machine/semgrep token=...
+# category: security
 servers:
   - name: semgrep
     type: command

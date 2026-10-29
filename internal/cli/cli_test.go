@@ -130,7 +130,7 @@ func TestHelpPrintsUsageAndSucceeds(t *testing.T) {
 func TestUsageNamesConfigLocations(t *testing.T) {
 	_, out, _ := run(t, "help")
 	for _, want := range []string{
-		"  serve      run the proxy and web UI (-c /etc/mcp-machine, --system-config-d, --config-d /data/config.d)\n",
+		"  serve      run the proxy and web UI (-c /etc/mcp-machine, --system-config-d, --config-d /data/config.d, --catalog /usr/share/mcp-machine/catalog)\n",
 		"  validate   validate configuration (-c /etc/mcp-machine, --system-config-d, --config-d /data/config.d)\n",
 	} {
 		if !strings.Contains(out, want) {

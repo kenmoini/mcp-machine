@@ -3,6 +3,7 @@
 # https://github.com/aquasecurity/trivy-mcp-plugin
 # Mount what it should scan read-only; the Podman socket is not mounted, so it
 # scans filesystems and remote images, not local ones.
+# category: security
 servers:
   - name: trivy
     type: build

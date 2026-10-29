@@ -110,3 +110,10 @@ button.primary:hover { color: #fff; filter: brightness(1.1); }
 .picker .card { color: var(--fg); }
 .picker .card:hover { border-color: var(--accent); text-decoration: none; }
 .picker h2 { margin-top: 0; }
+.catalog { margin-top: 2rem; }
+.catalog h3 { margin: 0 0 .25rem; }
+.catalog .tags { margin: 0 0 .5rem; }
+.catalog .card p.muted { margin: 0 0 .25rem; }
+.catalog .card small code { font-size: .75rem; }
+.pager { display: flex; gap: 1rem; align-items: center; justify-content: center; margin: 1rem 0; }
+.info.banner { background: #e8f1fb; border-color: #b9d3f0; color: #1f4b7a; overflow-wrap: anywhere; }

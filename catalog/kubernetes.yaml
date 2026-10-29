@@ -2,6 +2,7 @@
 # https://github.com/containers/kubernetes-mcp-server
 # Read-only until you trust the consumers; the kubeconfig is a host file
 # mounted read-only (put a scoped service-account kubeconfig there).
+# category: development
 servers:
   - name: kubernetes
     type: command

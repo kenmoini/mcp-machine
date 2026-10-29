@@ -1,6 +1,7 @@
 # The reference memory server: a knowledge graph kept in a named volume and
 # shared by every consumer of this server.
 # https://github.com/modelcontextprotocol/servers/tree/main/src/memory
+# category: development
 servers:
   - name: memory
     type: command

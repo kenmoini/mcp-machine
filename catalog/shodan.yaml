@@ -1,6 +1,7 @@
 # Shodan host, DNS and vulnerability lookups (read-only enrichment).
 # https://github.com/BurtTheCoder/mcp-shodan
 # Secret: vault kv put kv/mcp-machine/shodan api_key=...
+# category: security
 servers:
   - name: shodan
     type: command

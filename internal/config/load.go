@@ -163,6 +163,17 @@ func decodeDropIn(data []byte) ([]ServerSpec, error) {
 	return d.Servers, nil
 }
 
+// ParseDropIn strictly decodes a drop-in file, which may hold only a servers
+// list, and returns its servers as written: no defaults, no ${VAR} expansion.
+// A global key is an error naming it. The catalog reads its entries with it.
+func ParseDropIn(data []byte) ([]ServerSpec, error) {
+	specs, err := decodeDropIn(data)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	return specs, nil
+}
+
 // errEmptyFile reports a config file with no content. It carries no
 // "config:" prefix; the loader reports it as "config: <file>: file is empty".
 var errEmptyFile = errors.New("file is empty")

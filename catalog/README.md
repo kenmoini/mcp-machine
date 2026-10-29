@@ -1,14 +1,26 @@
 # Server catalog
 
 One drop-in per server, ready to copy into `/etc/mcp-machine/config.d/`
-(administrator) or `/data/config.d/<name>.yaml` (the UI's layer). Each file
-holds only a `servers:` list, as a drop-in must. Secrets are
+(administrator) or `/data/config.d/<name>.yaml` (the UI's layer), and shown
+as cards in the **Catalog** section of the web UI's Add server page, where a
+card opens the matching form prefilled. The image ships these files at
+`/usr/share/mcp-machine/catalog` (`serve --catalog`); bind-mount a directory
+of your own over it to offer a different set. Each file holds only a
+`servers:` list, as a drop-in must, with exactly one server named like the
+file. Secrets are
 `${vault:kv/data/mcp-machine/<name>#<key>}` references; the comment at the top
 of each file says what to store:
 
 ```sh
 vault kv put kv/mcp-machine/github token=ghp_...
 ```
+
+The UI reads the leading comment block of each file for its card: the first
+line is the description; a line that is a bare URL is the upstream link; a
+`# Secret:` line is the secret to store; a `# category:` line (`development`
+or `security`) is shown as a tag. A file that does not parse, holds more than
+one server, or names its server differently from the file is skipped with a
+warning in the log.
 
 With no Vault, replace a reference by `${VAR}` and pass the variable to the
 MCP Machine container. Host paths in `volumes:` are paths on the Podman host;

@@ -3,6 +3,7 @@
 # The token must be a fine-grained personal access token with the "MCP tool"
 # resource and Execute permission; classic PATs get 403 even with api scope.
 # Secret: vault kv put kv/mcp-machine/gitlab token=glpat-...
+# category: development
 servers:
   - name: gitlab
     type: remote

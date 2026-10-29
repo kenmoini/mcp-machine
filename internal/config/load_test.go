@@ -375,3 +375,20 @@ func TestUnsetVars(t *testing.T) {
 		t.Errorf("empty spec: %v", got)
 	}
 }
+
+func TestParseDropIn(t *testing.T) {
+	specs, err := config.ParseDropIn([]byte("servers:\n  - name: a\n    type: command\n    env: {T: \"${vault:kv/data/a#k}\"}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 || specs[0].Name != "a" || specs[0].Env["T"] != "${vault:kv/data/a#k}" || specs[0].Serve != nil {
+		t.Errorf("specs = %+v, want one server as written, no defaults", specs)
+	}
+	_, err = config.ParseDropIn([]byte("listen: ':1'\nservers: []\n"))
+	if err == nil || !strings.Contains(err.Error(), "listen") {
+		t.Errorf("global key: err = %v", err)
+	}
+	if specs, err := config.ParseDropIn(nil); err != nil || len(specs) != 0 {
+		t.Errorf("empty: %v %v", specs, err)
+	}
+}

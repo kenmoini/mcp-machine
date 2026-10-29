@@ -1,6 +1,7 @@
 # The reference filesystem server over a read-only host directory.
 # https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem
 # Adjust the host path; ":z" relabels for SELinux hosts.
+# category: development
 servers:
   - name: filesystem
     type: command

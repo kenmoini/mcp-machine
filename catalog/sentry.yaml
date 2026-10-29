@@ -2,6 +2,7 @@
 # mcp.sentry.dev endpoint needs a browser OAuth flow, which a remote server cannot do).
 # https://github.com/getsentry/sentry-mcp
 # Secret: vault kv put kv/mcp-machine/sentry token=sntrys_...
+# category: development
 servers:
   - name: sentry
     type: command

@@ -43,6 +43,10 @@ LABEL org.opencontainers.image.source="https://github.com/kenmoini/mcp-machine" 
 
 COPY --from=build /tmp/mcp-machine /usr/local/bin/mcp-machine
 
+# The catalog of ready-made servers the Add server page offers as cards
+# (serve --catalog). Bind-mount your own directory over it to replace it.
+COPY catalog/*.yaml /usr/share/mcp-machine/catalog/
+
 # The admin configuration root: config.yaml plus config.d/*.yaml. Bind-mount a
 # host directory read-only over /etc/mcp-machine; the app never writes there.
 # The mount is optional: without it the app falls back to the deprecated

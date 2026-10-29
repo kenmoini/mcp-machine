@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kenmoini/mcp-machine/internal/catalog"
 	"github.com/kenmoini/mcp-machine/internal/config"
 )
 
@@ -27,6 +28,7 @@ type formData struct {
 	Action  string
 	Values  url.Values
 	Errors  []string
+	Notice  string       // shown above the form; the catalog's description
 	Delete  deleteAction // the edit form's delete section
 }
 
@@ -465,17 +467,47 @@ func (u *ui) newForm(w http.ResponseWriter, r *http.Request) {
 	if !u.editable(w) {
 		return
 	}
-	t := r.URL.Query().Get("type")
+	q := r.URL.Query()
+	t := q.Get("type")
 	if t == "" {
-		u.page(w, http.StatusOK, "form_pick.html", "Add server", "new", nil)
+		page, _ := strconv.Atoi(q.Get("page"))
+		u.page(w, http.StatusOK, "form_pick.html", "Add server", "new", paginate(u.catalogEntries(), page, catalogPageSize))
 		return
 	}
 	if !validType(t) {
 		http.Error(w, "unknown server type", http.StatusBadRequest)
 		return
 	}
-	vals := url.Values{"type": {t}, "enabled": {"1"}}
-	u.formPage(w, http.StatusOK, formData{Type: t, Action: "/servers/new", Values: vals})
+	d := formData{Type: t, Action: "/servers/new", Values: url.Values{"type": {t}, "enabled": {"1"}}}
+	if name := q.Get("catalog"); name != "" {
+		e, ok := u.catalogEntry(name)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if e.Type != t {
+			http.Error(w, "catalog entry "+name+" is a "+e.Type+" server", http.StatusBadRequest)
+			return
+		}
+		d.Values = formFromSpec(stripDefaults(e.Spec))
+		d.Values.Set("enabled", "1")
+		d.Notice = u.catalogNotice(e)
+	}
+	u.formPage(w, http.StatusOK, d)
+}
+
+// catalogNotice is the text shown above a form prefilled from catalog entry
+// e: what it is and what to check, plus a heads-up when it references Vault
+// secrets and the configuration names no Vault (the form refuses to save
+// such a spec, so the user learns it before filling anything in).
+func (u *ui) catalogNotice(e catalog.Entry) string {
+	notice := "From the catalog: " + e.Description + " Check the host paths and the secret reference, then save."
+	if e.HasVaultRefs() {
+		if raw, err := u.Config.Raw(); err == nil && !raw.Vault.Configured() {
+			notice += " This entry reads its secret from Vault, but no vault.address is configured: set one, or replace ${vault:...} by a ${VAR} from MCP Machine's environment."
+		}
+	}
+	return notice
 }
 
 func (u *ui) createServer(w http.ResponseWriter, r *http.Request) {
