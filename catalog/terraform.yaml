@@ -1,0 +1,7 @@
+# HashiCorp's Terraform MCP server: registry providers, modules, and policies.
+# https://github.com/hashicorp/terraform-mcp-server
+servers:
+  - name: terraform
+    type: command
+    command:
+      run: "docker run -i --rm docker.io/hashicorp/terraform-mcp-server"

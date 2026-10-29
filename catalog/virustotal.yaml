@@ -1,0 +1,11 @@
+# VirusTotal lookups for hashes, URLs, domains and IPs (read-only enrichment).
+# https://github.com/BurtTheCoder/mcp-virustotal
+# Secret: vault kv put kv/mcp-machine/virustotal api_key=...
+servers:
+  - name: virustotal
+    type: command
+    command:
+      command: npx
+      args: ["-y", "@burtthecoder/mcp-virustotal"]
+      env:
+        VIRUSTOTAL_API_KEY: "${vault:kv/data/mcp-machine/virustotal#api_key}"

@@ -1,0 +1,14 @@
+# HashiCorp's Vault MCP server (beta): secrets engines, policies, KV data.
+# https://developer.hashicorp.com/vault/docs/mcp-server
+# HashiCorp advises against exposing it to other network users, and MCP Machine
+# has no authentication: give it a token scoped to exactly what the consumers
+# may touch, and treat this entry as administrator-only.
+# Secret: vault kv put kv/mcp-machine/vault-mcp token=hvs....
+servers:
+  - name: vault
+    type: command
+    command:
+      run: "docker run -i --rm -e VAULT_ADDR -e VAULT_TOKEN docker.io/hashicorp/vault-mcp-server"
+      env:
+        VAULT_ADDR: https://vault.lan:8200
+        VAULT_TOKEN: "${vault:kv/data/mcp-machine/vault-mcp#token}"

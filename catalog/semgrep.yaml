@@ -1,0 +1,15 @@
+# Semgrep's MCP server, now part of the semgrep binary ("semgrep mcp"); the
+# standalone semgrep/mcp repository was archived in October 2025.
+# https://semgrep.dev/docs/mcp
+# The token is optional (Semgrep AppSec Platform rules); remove the -e and the
+# env entry to run with the open-source rules only.
+# Secret: vault kv put kv/mcp-machine/semgrep token=...
+servers:
+  - name: semgrep
+    type: command
+    command:
+      run: "docker run -i --rm -e SEMGREP_APP_TOKEN docker.io/semgrep/semgrep semgrep mcp"
+      env:
+        SEMGREP_APP_TOKEN: "${vault:kv/data/mcp-machine/semgrep#token}"
+    container:
+      volumes: ["/srv/projects:/projects:ro,z"]

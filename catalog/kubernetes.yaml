@@ -1,0 +1,14 @@
+# containers/kubernetes-mcp-server (Red Hat): Kubernetes and OpenShift access.
+# https://github.com/containers/kubernetes-mcp-server
+# Read-only until you trust the consumers; the kubeconfig is a host file
+# mounted read-only (put a scoped service-account kubeconfig there).
+servers:
+  - name: kubernetes
+    type: command
+    command:
+      command: npx
+      args: ["-y", "kubernetes-mcp-server@latest", "--read-only"]
+      env:
+        KUBECONFIG: /kube/config
+    container:
+      volumes: ["/etc/mcp-machine/kube:/kube:ro,z"]

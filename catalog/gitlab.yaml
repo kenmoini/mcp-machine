@@ -1,0 +1,13 @@
+# GitLab's built-in MCP server (GitLab 19.2+ on Free; GA since 19.5).
+# https://docs.gitlab.com/user/model_context_protocol/mcp_server/
+# The token must be a fine-grained personal access token with the "MCP tool"
+# resource and Execute permission; classic PATs get 403 even with api scope.
+# Secret: vault kv put kv/mcp-machine/gitlab token=glpat-...
+servers:
+  - name: gitlab
+    type: remote
+    remote:
+      url: https://gitlab.example.com/api/v4/mcp
+      transport: http
+      headers:
+        Authorization: "Bearer ${vault:kv/data/mcp-machine/gitlab#token}"

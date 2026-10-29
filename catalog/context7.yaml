@@ -1,0 +1,12 @@
+# Context7: current documentation for libraries, to cut hallucinated APIs.
+# https://github.com/upstash/context7
+# The API key is optional (higher rate limits); remove the header without one.
+# Secret: vault kv put kv/mcp-machine/context7 api_key=ctx7sk-...
+servers:
+  - name: context7
+    type: remote
+    remote:
+      url: https://mcp.context7.com/mcp
+      transport: http
+      headers:
+        CONTEXT7_API_KEY: "${vault:kv/data/mcp-machine/context7#api_key}"

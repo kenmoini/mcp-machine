@@ -1,0 +1,14 @@
+# Trivy with its official MCP plugin, built from catalog/build/trivy in this
+# repository (point build.repo at your fork if you change the Containerfile).
+# https://github.com/aquasecurity/trivy-mcp-plugin
+# Mount what it should scan read-only; the Podman socket is not mounted, so it
+# scans filesystems and remote images, not local ones.
+servers:
+  - name: trivy
+    type: build
+    build:
+      repo: https://github.com/kenmoini/mcp-machine.git
+      ref: main
+      subdir: catalog/build/trivy
+    container:
+      volumes: ["/srv/projects:/projects:ro,z", "mcpm-trivy-cache:/root/.cache/trivy"]

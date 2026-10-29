@@ -1,0 +1,4 @@
+# Trivy with the official MCP plugin, speaking MCP over stdio.
+FROM docker.io/aquasec/trivy:latest
+RUN trivy plugin install mcp
+ENTRYPOINT ["trivy", "mcp"]

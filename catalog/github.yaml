@@ -1,0 +1,11 @@
+# GitHub's official MCP server, run locally from its image.
+# https://github.com/github/github-mcp-server
+# Secret: vault kv put kv/mcp-machine/github token=ghp_...   (a fine-grained PAT scoped to the repositories you need)
+servers:
+  - name: github
+    type: command
+    command:
+      run: "docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN -e GITHUB_TOOLSETS ghcr.io/github/github-mcp-server"
+      env:
+        GITHUB_PERSONAL_ACCESS_TOKEN: "${vault:kv/data/mcp-machine/github#token}"
+        GITHUB_TOOLSETS: "context,repos,issues,pull_requests"   # add code_security, actions, ... as needed

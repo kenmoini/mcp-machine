@@ -1,0 +1,14 @@
+# Snyk's official MCP server: SAST, SCA, IaC, container and SBOM scanning.
+# https://docs.snyk.io/integrations/snyk-cli-agentic-tools/snyk-mcp-server
+# Secret: vault kv put kv/mcp-machine/snyk token=...   (a service account token)
+# Mount the code to scan read-only under /projects.
+servers:
+  - name: snyk
+    type: command
+    command:
+      command: npx
+      args: ["-y", "snyk@latest", "mcp", "-t", "stdio"]
+      env:
+        SNYK_TOKEN: "${vault:kv/data/mcp-machine/snyk#token}"
+    container:
+      volumes: ["/srv/projects:/projects:ro,z"]

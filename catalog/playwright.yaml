@@ -1,0 +1,9 @@
+# Microsoft's Playwright MCP server from its image (the npx runtime image has
+# no browsers). Headless Chromium; one browser is shared by every consumer, so
+# give each team its own copy of this entry under another name if that matters.
+# https://github.com/microsoft/playwright-mcp
+servers:
+  - name: playwright
+    type: command
+    command:
+      run: "docker run -i --rm --init mcr.microsoft.com/playwright/mcp"

@@ -1,0 +1,11 @@
+# GitHub's hosted MCP server. No container: MCP Machine connects to it.
+# https://github.com/github/github-mcp-server (remote server section)
+# Secret: vault kv put kv/mcp-machine/github token=ghp_...
+servers:
+  - name: github-remote
+    type: remote
+    remote:
+      url: https://api.githubcopilot.com/mcp/
+      transport: http
+      headers:
+        Authorization: "Bearer ${vault:kv/data/mcp-machine/github#token}"

@@ -1,0 +1,8 @@
+# The reference sequential-thinking server: structured, revisable reasoning steps.
+# https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking
+servers:
+  - name: sequential-thinking
+    type: command
+    command:
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]

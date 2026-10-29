@@ -1,0 +1,11 @@
+# Grafana's official MCP server: dashboards, datasources, alerts, incidents.
+# https://github.com/grafana/mcp-grafana
+# Secret: vault kv put kv/mcp-machine/grafana token=glsa_...   (a service-account token with Viewer role)
+servers:
+  - name: grafana
+    type: command
+    command:
+      run: "docker run -i --rm -e GRAFANA_URL -e GRAFANA_SERVICE_ACCOUNT_TOKEN docker.io/mcp/grafana -t stdio"
+      env:
+        GRAFANA_URL: https://grafana.lan
+        GRAFANA_SERVICE_ACCOUNT_TOKEN: "${vault:kv/data/mcp-machine/grafana#token}"

@@ -1,0 +1,13 @@
+# Sentry's MCP server, run locally with a user auth token (the hosted
+# mcp.sentry.dev endpoint needs a browser OAuth flow, which a remote server cannot do).
+# https://github.com/getsentry/sentry-mcp
+# Secret: vault kv put kv/mcp-machine/sentry token=sntrys_...
+servers:
+  - name: sentry
+    type: command
+    command:
+      command: npx
+      args: ["-y", "@sentry/mcp-server@latest"]
+      env:
+        SENTRY_ACCESS_TOKEN: "${vault:kv/data/mcp-machine/sentry#token}"
+        SENTRY_HOST: sentry.io                 # your self-hosted host instead, if any
