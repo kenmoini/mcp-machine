@@ -106,7 +106,7 @@ button.primary { color: #fff; background: var(--accent); border-color: var(--acc
 button.primary:hover { color: #fff; filter: brightness(1.1); }
 .banner ul { margin: 0; padding-left: 1.2rem; }
 .danger-zone { margin-top: 2.5rem; padding-top: .5rem; border-top: 1px solid var(--line); max-width: 44rem; }
-.picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+.picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; margin-bottom: 1rem; }
 .picker .card { color: var(--fg); }
 .picker .card:hover { border-color: var(--accent); text-decoration: none; }
 .picker h2 { margin-top: 0; }
