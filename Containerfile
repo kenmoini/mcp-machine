@@ -1,7 +1,7 @@
 # MCP Machine image. Build with:  make image   (or: podman build -f Containerfile .)
 
 # --- build stage -------------------------------------------------------------
-FROM registry.access.redhat.com/ubi9/go-toolset:1.26 AS build
+FROM registry.access.redhat.com/ubi9/go-toolset:9.9 AS build
 
 # Named MCPM_* because the go-toolset base image sets ENV VERSION (the Go
 # version), which would override a plain ARG VERSION.
