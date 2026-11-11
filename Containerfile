@@ -35,7 +35,7 @@ RUN go build -buildvcs=false \
       -o /tmp/mcp-machine ./cmd/mcp-machine
 
 # --- runtime stage -----------------------------------------------------------
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.9
 
 LABEL org.opencontainers.image.source="https://github.com/kenmoini/mcp-machine" \
       org.opencontainers.image.description="Self-hosted proxy and manager for MCP servers running as Podman containers" \
