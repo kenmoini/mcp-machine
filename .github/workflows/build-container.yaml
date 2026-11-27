@@ -204,7 +204,7 @@ jobs:
 
       - name: Grype scan (SARIF)
         id: grype-sarif
-        uses: anchore/scan-action@v7.4.2
+        uses: anchore/scan-action@v7.4.3
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           output-format: sarif
@@ -221,7 +221,7 @@ jobs:
           category: grype-image
 
       - name: Grype scan (fail on fixable HIGH/CRITICAL)
-        uses: anchore/scan-action@v7.4.2
+        uses: anchore/scan-action@v7.4.3
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           output-format: table
