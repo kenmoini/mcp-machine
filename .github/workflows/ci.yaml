@@ -176,7 +176,7 @@ jobs:
 
       - name: Grype scan (SARIF)
         id: grype-sarif
-        uses: anchore/scan-action@v7.4.2
+        uses: anchore/scan-action@v7.4.3
         with:
           image: ${{ env.IMAGE_REF }}
           output-format: sarif
@@ -194,7 +194,7 @@ jobs:
           category: grype-container
 
       - name: Grype scan (fail on fixable HIGH/CRITICAL)
-        uses: anchore/scan-action@v7.4.2
+        uses: anchore/scan-action@v7.4.3
         with:
           image: ${{ env.IMAGE_REF }}
           output-format: table
